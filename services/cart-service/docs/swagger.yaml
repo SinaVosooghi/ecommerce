@@ -1,0 +1,373 @@
+openapi: 3.0.3
+info:
+  title: Cart Service API
+  description: Shopping cart microservice for e-commerce platform
+  version: 1.0.0
+  contact:
+    name: Platform Team
+    email: platform@example.com
+
+servers:
+  - url: http://localhost:8080
+    description: Local development
+  - url: https://api.staging.example.com
+    description: Staging environment
+  - url: https://api.example.com
+    description: Production environment
+
+tags:
+  - name: Cart
+    description: Shopping cart operations
+  - name: Health
+    description: Health check endpoints
+
+paths:
+  /health:
+    get:
+      tags:
+        - Health
+      summary: Liveness probe
+      description: Returns 200 OK if the service is running
+      operationId: healthCheck
+      responses:
+        '200':
+          description: Service is healthy
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/HealthResponse'
+
+  /ready:
+    get:
+      tags:
+        - Health
+      summary: Readiness probe
+      description: Returns 200 OK if the service is ready to accept traffic
+      operationId: readinessCheck
+      responses:
+        '200':
+          description: Service is ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+        '503':
+          description: Service is not ready
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ReadinessResponse'
+
+  /v1/cart/{userID}:
+    get:
+      tags:
+        - Cart
+      summary: Get cart
+      description: Retrieves the shopping cart for a user
+      operationId: getCart
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '200':
+          description: Cart retrieved successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartResponse'
+        '404':
+          description: Cart not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '400':
+          description: Invalid user ID
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Cart
+      summary: Clear cart
+      description: Removes all items from the cart
+      operationId: clearCart
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+      responses:
+        '204':
+          description: Cart cleared successfully
+        '404':
+          description: Cart not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/cart/{userID}/items:
+    post:
+      tags:
+        - Cart
+      summary: Add item to cart
+      description: Adds an item to the shopping cart
+      operationId: addItem
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/AddItemRequest'
+      responses:
+        '201':
+          description: Item added successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartResponse'
+        '400':
+          description: Invalid request
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '429':
+          description: Rate limit exceeded
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+  /v1/cart/{userID}/items/{itemID}:
+    patch:
+      tags:
+        - Cart
+      summary: Update item quantity
+      description: Updates the quantity of an item in the cart
+      operationId: updateItem
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/ItemID'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UpdateQuantityRequest'
+      responses:
+        '200':
+          description: Item updated successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartResponse'
+        '404':
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+        '409':
+          description: Conflict - cart was modified
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+    delete:
+      tags:
+        - Cart
+      summary: Remove item from cart
+      description: Removes an item from the cart
+      operationId: removeItem
+      parameters:
+        - $ref: '#/components/parameters/UserID'
+        - $ref: '#/components/parameters/ItemID'
+      responses:
+        '200':
+          description: Item removed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/CartResponse'
+        '404':
+          description: Item not found
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/ErrorResponse'
+
+components:
+  parameters:
+    UserID:
+      name: userID
+      in: path
+      required: true
+      description: User identifier (UUID or alphanumeric)
+      schema:
+        type: string
+        maxLength: 64
+        pattern: '^[a-zA-Z0-9_-]+$'
+
+    ItemID:
+      name: itemID
+      in: path
+      required: true
+      description: Cart item identifier
+      schema:
+        type: string
+        maxLength: 64
+
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Idempotency key for safe retries
+      schema:
+        type: string
+        format: uuid
+
+  schemas:
+    HealthResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          example: ok
+
+    ReadinessResponse:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ready, not ready]
+        timestamp:
+          type: string
+          format: date-time
+        checks:
+          type: object
+          additionalProperties:
+            $ref: '#/components/schemas/CheckResult'
+
+    CheckResult:
+      type: object
+      properties:
+        status:
+          type: string
+          enum: [ok, error]
+        message:
+          type: string
+        latency:
+          type: string
+
+    CartResponse:
+      type: object
+      properties:
+        id:
+          type: string
+          format: uuid
+        user_id:
+          type: string
+        items:
+          type: array
+          items:
+            $ref: '#/components/schemas/CartItemResponse'
+        item_count:
+          type: integer
+        total_quantity:
+          type: integer
+        total_price:
+          type: integer
+          description: Total price in cents
+        version:
+          type: integer
+          format: int64
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+
+    CartItemResponse:
+      type: object
+      properties:
+        item_id:
+          type: string
+          format: uuid
+        product_id:
+          type: string
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+        unit_price:
+          type: integer
+          description: Price in cents
+        subtotal:
+          type: integer
+          description: Subtotal in cents
+        added_at:
+          type: string
+          format: date-time
+
+    AddItemRequest:
+      type: object
+      required:
+        - product_id
+        - quantity
+      properties:
+        product_id:
+          type: string
+          maxLength: 64
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+        unit_price:
+          type: integer
+          minimum: 0
+          description: Price in cents
+
+    UpdateQuantityRequest:
+      type: object
+      required:
+        - quantity
+      properties:
+        quantity:
+          type: integer
+          minimum: 1
+          maximum: 99
+        version:
+          type: integer
+          format: int64
+          description: Expected cart version for optimistic locking
+
+    ErrorResponse:
+      type: object
+      properties:
+        code:
+          type: string
+          description: Error code
+        message:
+          type: string
+          description: Human-readable error message
+        details:
+          type: object
+          additionalProperties: true
+
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+
+security:
+  - BearerAuth: []

@@ -1,0 +1,110 @@
+version: 0.2
+
+env:
+  variables:
+    GO_VERSION: "1.22"
+    SERVICE_NAME: "cart-service"
+  parameter-store:
+    DOCKER_HUB_USER: "/codebuild/docker-hub-user"
+    DOCKER_HUB_TOKEN: "/codebuild/docker-hub-token"
+  exported-variables:
+    - IMAGE_TAG
+    - IMAGE_URI
+
+phases:
+  install:
+    runtime-versions:
+      golang: ${GO_VERSION}
+    commands:
+      - echo "Installing dependencies..."
+      - go version
+
+  pre_build:
+    commands:
+      - echo "Pre-build phase started at $(date)"
+      - echo "Logging in to Amazon ECR..."
+      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
+      
+      # Set image tag
+      - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:8}
+      - export IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:$IMAGE_TAG
+      
+      # Download dependencies
+      - echo "Downloading Go modules..."
+      - go mod download
+      - go mod verify
+
+  build:
+    commands:
+      - echo "Build phase started at $(date)"
+      
+      # Run linting
+      - echo "Running linter..."
+      - |
+        if command -v golangci-lint &> /dev/null; then
+          golangci-lint run ./...
+        else
+          echo "golangci-lint not installed, skipping"
+        fi
+      
+      # Run unit tests
+      - echo "Running unit tests..."
+      - go test -v -race -coverprofile=coverage.out ./internal/...
+      - go tool cover -func=coverage.out
+      
+      # Build binary
+      - echo "Building binary..."
+      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.version=$IMAGE_TAG" -o bin/cart-service ./cmd/cart-service
+      
+      # Build Docker image
+      - echo "Building Docker image..."
+      - docker build -t $SERVICE_NAME:$IMAGE_TAG .
+      - docker tag $SERVICE_NAME:$IMAGE_TAG $IMAGE_URI
+      - docker tag $SERVICE_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
+
+  post_build:
+    commands:
+      - echo "Post-build phase started at $(date)"
+      
+      # Push Docker image
+      - echo "Pushing Docker image..."
+      - docker push $IMAGE_URI
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
+      
+      # Create image definitions file for ECS
+      - echo "Creating imagedefinitions.json..."
+      - printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
+      
+      # Create appspec.yml for CodeDeploy
+      - echo "Creating appspec.yml..."
+      - |
+        cat > appspec.yml << EOF
+        version: 0.0
+        Resources:
+          - TargetService:
+              Type: AWS::ECS::Service
+              Properties:
+                TaskDefinition: <TASK_DEFINITION>
+                LoadBalancerInfo:
+                  ContainerName: "$SERVICE_NAME"
+                  ContainerPort: 8080
+        EOF
+      
+      - echo "Build completed at $(date)"
+
+artifacts:
+  files:
+    - imagedefinitions.json
+    - appspec.yml
+    - bin/cart-service
+  discard-paths: no
+
+cache:
+  paths:
+    - '/go/pkg/mod/**/*'
+
+reports:
+  coverage-report:
+    files:
+      - coverage.out
+    file-format: COBERTURAXML
