@@ -33,6 +33,13 @@ cd services/cart-service
 go mod download
 
 # Run with local configuration
+# Option 1: Using .env file (recommended for local development)
+# Copy .env.example to .env and customize as needed:
+# cp .env.example .env
+# Then edit .env with your local settings
+go run cmd/cart-service/main.go
+
+# Option 2: Using environment variables
 export ENV_NAME=dev
 export DYNAMODB_ENDPOINT=http://localhost:8000
 export DYNAMODB_TABLE=cart-service-carts

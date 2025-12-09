@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/go-playground/validator/v10"
+	"github.com/joho/godotenv"
 )
 
 // Config holds all configuration values for the cart service.
@@ -81,8 +82,12 @@ type Config struct {
 	JWTAudience string
 }
 
-// Load loads configuration from environment variables and validates it.
+// Load loads configuration from .env file (if present) and environment variables, then validates it.
+// Environment variables take precedence over .env file values.
 func Load() (*Config, error) {
+	// Try to load .env file (ignore error if file doesn't exist)
+	_ = godotenv.Load()
+
 	cfg := &Config{
 		// Server defaults
 		Port:        getEnvInt("APP_PORT", 8080),
