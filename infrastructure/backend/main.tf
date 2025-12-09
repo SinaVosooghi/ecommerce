@@ -32,8 +32,11 @@ data "aws_caller_identity" "current" {}
 resource "aws_s3_bucket" "terraform_state" {
   bucket = "${var.project_name}-terraform-state-${data.aws_caller_identity.current.account_id}"
 
+  # Allow force destroy to enable cleanup (set to false for production safety)
+  force_destroy = true
+
   lifecycle {
-    prevent_destroy = true
+    prevent_destroy = false  # Set to true to prevent accidental deletion
   }
 
   tags = {
