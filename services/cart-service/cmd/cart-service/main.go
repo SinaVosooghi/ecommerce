@@ -13,6 +13,7 @@ import (
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/app"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/config"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/persistence/dynamodb"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/server"
 )
 
@@ -44,10 +45,25 @@ func run() error {
 	logger.Info("Starting cart service...")
 	logger.Infof("Environment: %s, Port: %d", cfg.Environment, cfg.Port)
 
+	// Initialize DynamoDB client
+	dbClient, err := dynamodb.NewClient(ctx, dynamodb.ClientConfig{
+		Region:    cfg.AWSRegion,
+		Endpoint:  cfg.DynamoDBEndpoint,
+		TableName: cfg.DynamoDBTable,
+	})
+	if err != nil {
+		return fmt.Errorf("failed to create DynamoDB client: %w", err)
+	}
+	logger.Infof("Connected to DynamoDB table: %s", cfg.DynamoDBTable)
+
+	// Create repository
+	repo := dynamodb.NewRepository(dbClient)
+
 	// Initialize application container
 	application, err := app.New(ctx,
 		app.WithConfig(cfg),
 		app.WithLogger(logger),
+		app.WithRepository(repo),
 	)
 	if err != nil {
 		return fmt.Errorf("failed to initialize application: %w", err)

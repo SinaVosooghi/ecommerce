@@ -1,0 +1,43 @@
+# Production Environment Variables
+# Copy this file to terraform.tfvars and fill in the values
+
+project_name = "ecommerce"
+service_name = "cart-service"
+environment  = "prod"
+aws_region   = "us-east-1"
+
+# VPC Configuration
+existing_vpc_id = "" # Leave empty to create new VPC
+vpc_cidr        = "10.2.0.0/16"
+
+# ECS Configuration (required)
+image_tag = "v1.0.0"
+
+# Redis Configuration
+enable_redis     = true
+redis_auth_token = "" # Generate a secure token
+
+# SSL (required for production)
+certificate_arn = "arn:aws:acm:us-east-1:ACCOUNT_ID:certificate/CERT_ID"
+
+# Alerting
+alarm_sns_topic_arns = [
+  "arn:aws:sns:us-east-1:ACCOUNT_ID:alerts"
+]
+
+# CI/CD (required)
+source_provider         = "CodeStarSourceConnection"
+codestar_connection_arn = "arn:aws:codestar-connections:us-east-1:ACCOUNT_ID:connection/CONNECTION_ID"
+repository_id           = "owner/ecommerce"
+
+# Secrets (optional - can also be created manually)
+secrets = {
+  "jwt-secret" = {
+    description = "JWT signing secret"
+    value       = "your-jwt-secret-here"
+  }
+  "redis-auth-token" = {
+    description = "Redis authentication token"
+    value       = "your-redis-token-here"
+  }
+}

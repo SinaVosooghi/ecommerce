@@ -5,6 +5,7 @@ import (
 	"context"
 
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/config"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/core/cart"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
 )
 
@@ -69,12 +70,11 @@ func WithSecrets(s SecretsManager) Option {
 
 // CartRepository interface for cart persistence.
 type CartRepository interface {
-	GetCart(ctx context.Context, userID string) (interface{}, error)
-	SaveCart(ctx context.Context, cart interface{}) error
-	SaveCartWithVersion(ctx context.Context, cart interface{}, expectedVersion int64) error
+	GetCart(ctx context.Context, userID string) (*cart.Cart, error)
+	SaveCart(ctx context.Context, c *cart.Cart) error
+	SaveCartWithVersion(ctx context.Context, c *cart.Cart, expectedVersion int64) error
 	DeleteCart(ctx context.Context, userID string) error
-	AddItem(ctx context.Context, userID string, item interface{}) error
-	RemoveItem(ctx context.Context, userID, itemID string) error
+	HealthCheck(ctx context.Context) error
 }
 
 // EventPublisher interface for event publishing.
