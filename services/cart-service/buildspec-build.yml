@@ -73,14 +73,15 @@ phases:
       - docker push $IMAGE_URI
       - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME:latest
       
-      # Create image definitions file for ECS
+      # Create image definitions file for ECS (copy to root for artifacts)
       - echo "Creating imagedefinitions.json..."
       - |
         printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
+        cp imagedefinitions.json ../imagedefinitions.json
       - |
         echo "Image definitions created: $(cat imagedefinitions.json)"
       
-      # Create appspec.yml for CodeDeploy
+      # Create appspec.yml for CodeDeploy (copy to root for artifacts)
       - echo "Creating appspec.yml..."
       - |
         cat > appspec.yml << EOF
@@ -94,6 +95,10 @@ phases:
                   ContainerName: "$SERVICE_NAME"
                   ContainerPort: 8080
         EOF
+        cp appspec.yml ../appspec.yml
+      
+      # Copy binary to root for artifacts
+      - cp bin/cart-service ../bin/cart-service
       
       - echo "Build completed at $(date)"
 
@@ -108,8 +113,9 @@ cache:
   paths:
     - '/go/pkg/mod/**/*'
 
-reports:
-  coverage-report:
-    files:
-      - coverage.out
-    file-format: COBERTURAXML
+# Reports disabled - requires additional IAM permissions for codebuild:CreateReportGroup
+# reports:
+#   coverage-report:
+#     files:
+#       - coverage.out
+#     file-format: COBERTURAXML
