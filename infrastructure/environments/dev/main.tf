@@ -167,7 +167,7 @@ module "ecs" {
 
   project_name                 = var.project_name
   service_name                 = var.service_name
-  enable_container_health_check = false # Disabled for distroless image (no wget/shell)
+  enable_container_health_check = true # Uses custom healthcheck binary for distroless
   environment           = var.environment
   aws_region            = var.aws_region
   vpc_id                = module.vpc.vpc_id

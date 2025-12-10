@@ -22,6 +22,10 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /app/cart-service \
     ./cmd/cart-service
 
+# Build minimal health check tool (simple HTTP client)
+RUN echo 'package main; import ("net/http"; "os"); func main() { resp, err := http.Get("http://localhost:8080/health"); if err != nil || resp.StatusCode != 200 { os.Exit(1) } }' > /tmp/healthcheck.go && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o /app/healthcheck /tmp/healthcheck.go
+
 # Runtime stage
 FROM gcr.io/distroless/static:nonroot
 
@@ -33,6 +37,9 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
 # Copy the binary
 COPY --from=builder /app/cart-service /cart-service
+
+# Copy health check tool
+COPY --from=builder /app/healthcheck /healthcheck
 
 # Use non-root user
 USER nonroot:nonroot
