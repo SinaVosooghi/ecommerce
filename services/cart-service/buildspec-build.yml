@@ -78,8 +78,10 @@ phases:
       
       # Create image definitions file for ECS
       - echo "Creating imagedefinitions.json..."
-      - printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
-      - echo "Image definitions created: $(cat imagedefinitions.json)"
+      - |
+        printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
+      - |
+        echo "Image definitions created: $(cat imagedefinitions.json)"
       
       # Create appspec.yml for CodeDeploy
       - echo "Creating appspec.yml..."
