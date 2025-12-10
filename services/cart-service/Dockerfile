@@ -23,27 +23,7 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     ./cmd/cart-service
 
 # Build minimal health check tool (simple HTTP client, statically linked for distroless)
-RUN cat > /tmp/healthcheck.go << 'EOF' && \
-package main
-import (
-    "net/http"
-    "os"
-    "io"
-    "time"
-)
-func main() {
-    client := &http.Client{Timeout: 5 * time.Second}
-    resp, err := client.Get("http://localhost:8080/health")
-    if err != nil {
-        os.Exit(1)
-    }
-    defer resp.Body.Close()
-    io.Copy(io.Discard, resp.Body)
-    if resp.StatusCode != 200 {
-        os.Exit(1)
-    }
-}
-EOF
+RUN printf 'package main\nimport ("net/http";"os";"io";"time")\nfunc main(){client:=&http.Client{Timeout:5*time.Second};resp,err:=client.Get("http://localhost:8080/health");if err!=nil{os.Exit(1)};defer resp.Body.Close();io.Copy(io.Discard,resp.Body);if resp.StatusCode!=200{os.Exit(1)}}\n' > /tmp/healthcheck.go && \
     CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -tags netgo -installsuffix netgo -o /app/healthcheck /tmp/healthcheck.go
 
 # Runtime stage
