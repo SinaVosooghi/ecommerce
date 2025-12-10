@@ -249,9 +249,12 @@ resource "aws_iam_role_policy" "codepipeline" {
         Action = [
           "iam:PassRole"
         ]
-        Resource = "*"
+        Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ecs*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ECS*"
+        ]
         Condition = {
-          StringEqualsIfExists = {
+          StringEquals = {
             "iam:PassedToService" = ["ecs-tasks.amazonaws.com"]
           }
         }
