@@ -250,6 +250,8 @@ resource "aws_iam_role_policy" "codepipeline" {
           "iam:PassRole"
         ]
         Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*execution*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*task*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ecs*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ECS*"
         ]
