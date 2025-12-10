@@ -38,8 +38,8 @@ COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 # Copy the binary
 COPY --from=builder /app/cart-service /cart-service
 
-# Copy health check tool
-COPY --from=builder /app/healthcheck /healthcheck
+# Copy health check tool (ensure executable)
+COPY --from=builder --chmod=755 /app/healthcheck /healthcheck
 
 # Use non-root user
 USER nonroot:nonroot
