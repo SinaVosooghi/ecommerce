@@ -87,7 +87,31 @@ variable "source_provider" {
 }
 
 variable "codestar_connection_arn" {
-  description = "CodeStar connection ARN"
+  description = "CodeStar connection ARN (use if create_codestar_connection is false)"
+  type        = string
+  default     = ""
+}
+
+variable "create_codestar_connection" {
+  description = "Create CodeStar connection via Terraform (requires manual authorization in AWS Console)"
+  type        = bool
+  default     = true
+}
+
+variable "codestar_connection_name" {
+  description = "Name for the CodeStar connection (used when create_codestar_connection is true)"
+  type        = string
+  default     = ""
+}
+
+variable "codestar_provider_type" {
+  description = "CodeStar connection provider type: GitHub, Bitbucket, GitLab, GitHubEnterpriseServer, GitLabSelfManaged"
+  type        = string
+  default     = "GitHub"
+}
+
+variable "codestar_host_arn" {
+  description = "Host ARN for GitHub Enterprise Server or GitLab Self-Managed (required for enterprise providers)"
   type        = string
   default     = ""
 }

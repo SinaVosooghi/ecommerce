@@ -3,7 +3,7 @@ version: 0.2
 env:
   variables:
     GO_VERSION: "1.22"
-    SERVICE_NAME: "cart-service"
+    # SERVICE_NAME and PROJECT_NAME are set by CodeBuild environment variables
   parameter-store:
     DOCKER_HUB_USER: "/codebuild/docker-hub-user"
     DOCKER_HUB_TOKEN: "/codebuild/docker-hub-token"
@@ -25,9 +25,14 @@ phases:
       - echo "Logging in to Amazon ECR..."
       - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
       
-      # Set image tag
+      # Set image tag and repository name
       - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:8}
-      - export IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:$IMAGE_TAG
+      - export ECR_REPO_NAME=${PROJECT_NAME}-${SERVICE_NAME}
+      - export IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME:$IMAGE_TAG
+      
+      # Change to service directory
+      - echo "Changing to service directory..."
+      - cd services/cart-service
       
       # Download dependencies
       - echo "Downloading Go modules..."
@@ -60,7 +65,7 @@ phases:
       - echo "Building Docker image..."
       - docker build -t $SERVICE_NAME:$IMAGE_TAG .
       - docker tag $SERVICE_NAME:$IMAGE_TAG $IMAGE_URI
-      - docker tag $SERVICE_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
+      - docker tag $SERVICE_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME:latest
 
   post_build:
     commands:
@@ -69,11 +74,12 @@ phases:
       # Push Docker image
       - echo "Pushing Docker image..."
       - docker push $IMAGE_URI
-      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
+      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$ECR_REPO_NAME:latest
       
       # Create image definitions file for ECS
       - echo "Creating imagedefinitions.json..."
       - printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
+      - echo "Image definitions created: $(cat imagedefinitions.json)"
       
       # Create appspec.yml for CodeDeploy
       - echo "Creating appspec.yml..."

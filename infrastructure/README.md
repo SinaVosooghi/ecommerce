@@ -53,7 +53,58 @@ After deployment, key outputs:
 - `ecr_repository_url` - Docker registry
 - `dynamodb_table_name` - Cart data table
 
-## Build & Deploy Container
+## CI/CD Pipeline
+
+The infrastructure includes a CI/CD pipeline using AWS CodePipeline and CodeBuild that automatically builds and deploys the service on code changes.
+
+### Activating CI/CD for Dev Environment
+
+#### Automated Setup (Recommended)
+
+1. **Configure Terraform Variables**:
+   - Edit `infrastructure/environments/dev/terraform.tfvars`
+   - Set `enable_cicd = true`
+   - Set `create_codestar_connection = true` (default)
+   - Set `codestar_provider_type` to your Git provider: `GitHub`, `Bitbucket`, `GitLab`, `GitHubEnterpriseServer`, or `GitLabSelfManaged`
+   - Set `repository_id` in format `owner/repo-name` (e.g., `myusername/ecommerce`)
+   - Optionally set `codestar_connection_name` (auto-generated if empty)
+   - For enterprise providers, set `codestar_host_arn` if required
+
+2. **Deploy CI/CD Infrastructure**:
+   ```bash
+   cd infrastructure/environments/dev
+   terraform plan  # Review changes
+   terraform apply # Creates CodeStar connection and pipeline resources
+   ```
+
+3. **Authorize CodeStar Connection** (Required - One-time manual step):
+   - After `terraform apply`, the connection will be in `PENDING` status
+   - Check connection status: `terraform output codestar_connection_status`
+   - Go to AWS Console → CodePipeline → Settings → Connections
+   - Find your connection (name: `ecommerce-cart-service-dev-connection` or custom name)
+   - Click "Update pending connection" or "Complete connection"
+   - Authorize the connection with your Git provider (OAuth or App installation)
+   - Connection status will change to `AVAILABLE`
+   - **Note**: Pipeline will not work until connection is authorized
+   - **Tip**: You can check connection ARN with: `terraform output codestar_connection_arn`
+
+4. **Pipeline Behavior**:
+   - Pipeline triggers automatically on pushes to `develop` branch
+   - Builds Docker image, runs tests, and deploys to ECS
+   - Monitor pipeline status in AWS CodePipeline console
+
+#### Using Existing Connection (Alternative)
+
+If you already have a CodeStar connection:
+
+1. Set `create_codestar_connection = false` in `terraform.tfvars`
+2. Set `codestar_connection_arn` to your existing connection ARN
+3. Set `repository_id` to your repository
+4. Run `terraform apply`
+
+### Manual Deployment (Alternative)
+
+If CI/CD is not enabled, you can deploy manually:
 
 ```bash
 # Login to ECR

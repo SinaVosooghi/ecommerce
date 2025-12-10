@@ -201,6 +201,37 @@ module "ecs" {
 }
 
 #------------------------------------------------------------------------------
+# CodeStar Connection (for CI/CD)
+#------------------------------------------------------------------------------
+locals {
+  # AWS CodeStar connection names must be <= 32 characters
+  codestar_connection_name = var.codestar_connection_name != "" ? var.codestar_connection_name : "${var.project_name}-${var.service_name}-${var.environment}"
+}
+
+resource "aws_codestarconnections_connection" "main" {
+  count = var.enable_cicd && var.create_codestar_connection ? 1 : 0
+
+  name          = local.codestar_connection_name
+  provider_type = var.codestar_provider_type
+
+  # For GitHub Enterprise Server or GitLab Self-Managed
+  host_arn = var.codestar_host_arn != "" ? var.codestar_host_arn : null
+
+  tags = merge(local.common_tags, {
+    Name = local.codestar_connection_name
+  })
+}
+
+# Determine which connection ARN to use
+locals {
+  codestar_connection_arn_to_use = var.enable_cicd ? (
+    var.create_codestar_connection && length(aws_codestarconnections_connection.main) > 0
+      ? aws_codestarconnections_connection.main[0].arn
+      : var.codestar_connection_arn
+  ) : ""
+}
+
+#------------------------------------------------------------------------------
 # CI/CD (optional for dev)
 #------------------------------------------------------------------------------
 module "cicd" {
@@ -211,9 +242,10 @@ module "cicd" {
   service_name            = var.service_name
   aws_region              = var.aws_region
   source_provider         = var.source_provider
-  codestar_connection_arn = var.codestar_connection_arn
+  codestar_connection_arn = local.codestar_connection_arn_to_use
   repository_id           = var.repository_id
   branch_name             = "develop"
+  buildspec_file          = "services/cart-service/buildspec-build.yml"
   ecr_repository_url      = module.ecr.repository_url
   ecr_repository_arn      = module.ecr.repository_arn
   ecs_cluster_name        = module.ecs.cluster_name

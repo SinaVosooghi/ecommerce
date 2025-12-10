@@ -69,6 +69,11 @@ resource "aws_codebuild_project" "build" {
     }
 
     environment_variable {
+      name  = "PROJECT_NAME"
+      value = var.project_name
+    }
+
+    environment_variable {
       name  = "SERVICE_NAME"
       value = var.service_name
     }

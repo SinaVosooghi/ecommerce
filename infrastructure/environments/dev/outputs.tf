@@ -47,3 +47,13 @@ output "api_endpoint" {
   description = "API endpoint URL"
   value       = "http://${module.alb.alb_dns_name}"
 }
+
+output "codestar_connection_arn" {
+  description = "CodeStar connection ARN (requires manual authorization in AWS Console)"
+  value       = var.enable_cicd && var.create_codestar_connection && length(aws_codestarconnections_connection.main) > 0 ? aws_codestarconnections_connection.main[0].arn : null
+}
+
+output "codestar_connection_status" {
+  description = "CodeStar connection status (PENDING until manually authorized)"
+  value       = var.enable_cicd && var.create_codestar_connection && length(aws_codestarconnections_connection.main) > 0 ? aws_codestarconnections_connection.main[0].connection_status : null
+}
