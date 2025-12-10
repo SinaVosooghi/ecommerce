@@ -4,9 +4,6 @@ env:
   variables:
     GO_VERSION: "1.22"
     # SERVICE_NAME and PROJECT_NAME are set by CodeBuild environment variables
-  parameter-store:
-    DOCKER_HUB_USER: "/codebuild/docker-hub-user"
-    DOCKER_HUB_TOKEN: "/codebuild/docker-hub-token"
   exported-variables:
     - IMAGE_TAG
     - IMAGE_URI
