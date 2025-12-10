@@ -253,11 +253,12 @@ resource "aws_iam_role_policy" "codepipeline" {
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*execution*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*task*",
           "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ecs*",
-          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ECS*"
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*ECS*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecommerce-*"
         ]
         Condition = {
           StringEquals = {
-            "iam:PassedToService" = ["ecs-tasks.amazonaws.com"]
+            "iam:PassedToService" = ["ecs-tasks.amazonaws.com", "ecs.amazonaws.com"]
           }
         }
       },
