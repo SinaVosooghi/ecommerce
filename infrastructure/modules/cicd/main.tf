@@ -258,9 +258,20 @@ resource "aws_iam_role_policy" "codepipeline" {
         ]
         Condition = {
           StringEquals = {
-            "iam:PassedToService" = ["ecs-tasks.amazonaws.com", "ecs.amazonaws.com"]
+            "iam:PassedToService" = ["ecs-tasks.amazonaws.com", "ecs.amazonaws.com", "ec2.amazonaws.com"]
           }
         }
+      },
+      {
+        Effect = "Allow"
+        Action = [
+          "iam:GetRole"
+        ]
+        Resource = [
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*execution*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/*task*",
+          "arn:aws:iam::${data.aws_caller_identity.current.account_id}:role/ecommerce-*"
+        ]
       },
       {
         Effect = "Allow"
