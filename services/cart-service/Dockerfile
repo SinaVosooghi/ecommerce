@@ -22,9 +22,9 @@ RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build \
     -o /app/cart-service \
     ./cmd/cart-service
 
-# Build minimal health check tool (simple HTTP client)
-RUN echo 'package main; import ("net/http"; "os"); func main() { resp, err := http.Get("http://localhost:8080/health"); if err != nil || resp.StatusCode != 200 { os.Exit(1) } }' > /tmp/healthcheck.go && \
-    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s" -o /app/healthcheck /tmp/healthcheck.go
+# Build minimal health check tool (simple HTTP client, statically linked for distroless)
+RUN echo 'package main; import ("net/http"; "os"); func main() { resp, err := http.Get("http://localhost:8080/health"); if err != nil { os.Exit(1) }; if resp != nil { resp.Body.Close(); if resp.StatusCode != 200 { os.Exit(1) } } }' > /tmp/healthcheck.go && \
+    CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -linkmode external -extldflags -static" -tags netgo -installsuffix netgo -o /app/healthcheck /tmp/healthcheck.go
 
 # Runtime stage
 FROM gcr.io/distroless/static:nonroot
