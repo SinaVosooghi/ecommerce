@@ -2,7 +2,7 @@ version: 0.2
 
 env:
   variables:
-    GO_VERSION: "1.22"
+    GO_VERSION: "1.23"
     # SERVICE_NAME and PROJECT_NAME are set by CodeBuild environment variables
   exported-variables:
     - IMAGE_TAG

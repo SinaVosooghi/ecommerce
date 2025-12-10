@@ -97,13 +97,13 @@ resource "aws_ecs_task_definition" "main" {
         }
       }
 
-      healthCheck = {
+      healthCheck = var.enable_container_health_check ? {
         command     = ["CMD-SHELL", "wget -q --spider http://localhost:${var.container_port}/health || exit 1"]
         interval    = 30
         timeout     = 5
         retries     = 3
         startPeriod = 60
-      }
+      } : null
 
       ulimits = [
         {

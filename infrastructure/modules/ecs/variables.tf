@@ -130,6 +130,12 @@ variable "health_check_grace_period" {
   default     = 60
 }
 
+variable "enable_container_health_check" {
+  description = "Enable container-level health check (requires wget/curl in image)"
+  type        = bool
+  default     = true
+}
+
 variable "enable_execute_command" {
   description = "Enable ECS Exec for debugging"
   type        = bool
