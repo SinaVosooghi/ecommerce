@@ -2,7 +2,7 @@ package resilience
 
 import (
 	"context"
-	"math/rand"
+	"math/rand/v2"
 	"time"
 )
 
@@ -64,7 +64,7 @@ func Retry(ctx context.Context, cfg RetryConfig, fn func() error) error {
 		if cfg.Jitter {
 			// Add jitter: 50% to 150% of delay
 			jitterRange := float64(delay) * 0.5
-			jitter := time.Duration(rand.Float64()*jitterRange*2 - jitterRange)
+			jitter := time.Duration(rand.Float64()*jitterRange*2 - jitterRange) //nolint:gosec // jitter does not need a CSPRNG
 			waitTime = delay + jitter
 		}
 
@@ -112,7 +112,7 @@ func RetryWithResult[T any](ctx context.Context, cfg RetryConfig, fn func() (T, 
 		waitTime := delay
 		if cfg.Jitter {
 			jitterRange := float64(delay) * 0.5
-			jitter := time.Duration(rand.Float64()*jitterRange*2 - jitterRange)
+			jitter := time.Duration(rand.Float64()*jitterRange*2 - jitterRange) //nolint:gosec // jitter does not need a CSPRNG
 			waitTime = delay + jitter
 		}
 

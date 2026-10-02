@@ -15,11 +15,11 @@ type Flags interface {
 
 // Known feature flags
 const (
-	FlagNewPricingEngine      = "cart.new_pricing_engine"
-	FlagExpressCheckout       = "cart.express_checkout"
-	FlagRecommendationWidget  = "cart.recommendation_widget"
-	FlagOptimisticLocking     = "cart.optimistic_locking"
-	FlagEventPublishing       = "cart.event_publishing"
+	FlagNewPricingEngine     = "cart.new_pricing_engine"
+	FlagExpressCheckout      = "cart.express_checkout"
+	FlagRecommendationWidget = "cart.recommendation_widget"
+	FlagOptimisticLocking    = "cart.optimistic_locking"
+	FlagEventPublishing      = "cart.event_publishing"
 )
 
 // InMemoryFlags is an in-memory implementation for testing.
@@ -160,11 +160,11 @@ func (f *PercentageFlags) Close() error {
 	return nil
 }
 
-// hashString returns a simple hash of a string.
+// hashString returns the djb2 hash of a string's bytes.
 func hashString(s string) uint32 {
 	var hash uint32 = 5381
-	for _, c := range s {
-		hash = ((hash << 5) + hash) + uint32(c)
+	for i := 0; i < len(s); i++ {
+		hash = ((hash << 5) + hash) + uint32(s[i])
 	}
 	return hash
 }

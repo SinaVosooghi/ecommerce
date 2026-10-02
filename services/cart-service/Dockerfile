@@ -1,7 +1,7 @@
 # Requires BuildKit (the default builder since Docker 23) for cache mounts.
 
 # Build stage
-FROM golang:1.24-alpine AS builder
+FROM golang:1.27-alpine AS builder
 
 # Set automatically by BuildKit for the target platform
 ARG TARGETOS=linux

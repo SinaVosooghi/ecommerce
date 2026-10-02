@@ -19,42 +19,36 @@ A production-ready shopping cart microservice built in Go, designed for AWS depl
 
 ### Prerequisites
 
-- Go 1.22+
-- AWS CLI configured
-- Docker (for local DynamoDB)
+- Go 1.27+ (the `go` line in `go.mod` is authoritative; older Go versions download it automatically)
+- Docker with Compose v2
+- [golangci-lint v2](https://golangci-lint.run/docs/welcome/install/) for `make lint`
 
 ### Local Development
 
 ```bash
-# Clone and navigate to the service
 cd services/cart-service
 
-# Install dependencies
-go mod download
+# Everything in containers: service on :8080, DynamoDB Local on :8000 (table created
+# automatically), DynamoDB admin UI on :8001. Auth is disabled in this stack.
+make compose-up
+curl localhost:8080/ready
 
-# Run with local configuration
-# Option 1: Using .env file (recommended for local development)
-# Copy .env.example to .env and customize as needed:
-# cp .env.example .env
-# Then edit .env with your local settings
-go run cmd/cart-service/main.go
-
-# Option 2: Using environment variables
-export ENV_NAME=dev
-export DYNAMODB_ENDPOINT=http://localhost:8000
-export DYNAMODB_TABLE=cart-service-carts
-go run cmd/cart-service/main.go
+# Or run the service from source against the Compose DynamoDB:
+cp .env.example .env   # then set DYNAMODB_ENDPOINT=http://localhost:8000 and AUTH_ENABLED=false
+make run
 ```
 
-### Running with Docker Compose
+### Make targets
 
-```bash
-# Start dependencies (DynamoDB Local, Redis)
-docker-compose up -d
-
-# Run the service
-go run cmd/cart-service/main.go
-```
+| Target | What it does |
+|--------|--------------|
+| `make lint` | golangci-lint (config in `.golangci.yml`) |
+| `make fmt` | Format with gofumpt |
+| `make test` | All tests with `-race` |
+| `make cover` | Tests plus `coverage.html` |
+| `make vuln` | `govulncheck` (pinned as a Go tool in `go.mod`) |
+| `make build` / `make docker` | Binary in `bin/` / container image |
+| `make ci` | lint, test, vuln and build: the same checks CI runs |
 
 ## API Endpoints
 
@@ -157,11 +151,8 @@ cart-service/
 ## Testing
 
 ```bash
-# Run unit tests
-go test ./internal/...
-
-# Run with coverage
-go test -cover ./internal/...
+# Run all tests (unit + integration)
+make test
 
 # Run integration tests (in-memory; they exercise the real router and middleware)
 go test -race ./tests/integration/...
@@ -173,12 +164,18 @@ k6 run tests/load/scenarios/baseline.js
 ## Building
 
 ```bash
-# Build binary
-go build -o bin/cart-service ./cmd/cart-service
-
-# Build Docker image
-docker build -t cart-service:latest .
+make build    # bin/cart-service, version stamped from git
+make docker   # cart-service:<git sha>
 ```
+
+## CI/CD
+
+- **Pull requests:** `.github/workflows/ci.yml` runs the following.
+  - Go checks: lint, tests with `-race`, govulncheck.
+  - Image check: a Docker build, plus a container health-check smoke test.
+  - Terraform checks: fmt, validate and tflint.
+- **Deploys:** AWS CodePipeline runs `buildspec-build.yml`. It installs the Go version from `go.mod` and runs the same checks. It then pushes the image to ECR tagged with the commit SHA and deploys it to ECS.
+- **Dependency updates:** Dependabot opens weekly updates for Go modules, the Dockerfile, GitHub Actions and Terraform providers.
 
 ## Deployment
 

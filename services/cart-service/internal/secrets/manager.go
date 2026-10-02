@@ -104,7 +104,7 @@ func NewInMemoryManager() *InMemoryManager {
 func (m *InMemoryManager) GetSecret(ctx context.Context, key string) (string, error) {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
-	
+
 	value, ok := m.secrets[key]
 	if !ok {
 		return "", &SecretNotFoundError{Key: key}

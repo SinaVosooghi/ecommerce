@@ -36,7 +36,7 @@ resource "aws_s3_bucket" "terraform_state" {
   force_destroy = true
 
   lifecycle {
-    prevent_destroy = false  # Set to true to prevent accidental deletion
+    prevent_destroy = false # Set to true to prevent accidental deletion
   }
 
   tags = {
@@ -53,7 +53,7 @@ resource "aws_s3_bucket_versioning" "terraform_state" {
 
 resource "aws_s3_bucket_server_side_encryption_configuration" "terraform_state" {
   bucket = aws_s3_bucket.terraform_state.id
-  
+
   rule {
     apply_server_side_encryption_by_default {
       sse_algorithm = "AES256"
@@ -124,7 +124,7 @@ output "lock_table_name" {
 
 output "backend_config" {
   description = "Backend configuration for environments"
-  value = <<-EOT
+  value       = <<-EOT
     backend "s3" {
       bucket         = "${aws_s3_bucket.terraform_state.bucket}"
       key            = "ENV/cart-service/terraform.tfstate"

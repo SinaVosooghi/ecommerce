@@ -63,18 +63,21 @@ After deployment, key outputs:
 
 ## Build & Deploy Container
 
+CodePipeline does this automatically using `services/cart-service/buildspec-build.yml`. To deploy by hand, tag the image with the commit SHA (not `latest`) and deploy that tag through Terraform:
+
 ```bash
 # Login to ECR
 aws ecr get-login-password --region eu-central-1 | docker login --username AWS --password-stdin <ACCOUNT>.dkr.ecr.eu-central-1.amazonaws.com
 
-# Build and push
+# Build and push an immutable tag
+TAG=$(git rev-parse --short=8 HEAD)
 cd services/cart-service
-docker build -t cart-service .
-docker tag cart-service:latest <ECR_URL>:latest
-docker push <ECR_URL>:latest
+docker build --build-arg VERSION=$TAG -t <ECR_URL>:$TAG .
+docker push <ECR_URL>:$TAG
 
-# Force new deployment
-aws ecs update-service --cluster ecommerce-dev --service cart-service-dev --force-new-deployment
+# Roll out that tag
+cd ../../infrastructure/environments/dev
+terraform apply -var image_tag=$TAG
 ```
 
 ## Cleanup

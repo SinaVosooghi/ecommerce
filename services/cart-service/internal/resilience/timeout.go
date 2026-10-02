@@ -8,11 +8,11 @@ import (
 
 // TimeoutConfig holds timeout configuration for different operations.
 type TimeoutConfig struct {
-	Default        time.Duration
-	Read           time.Duration
-	Write          time.Duration
-	Connect        time.Duration
-	ExternalAPI    time.Duration
+	Default     time.Duration
+	Read        time.Duration
+	Write       time.Duration
+	Connect     time.Duration
+	ExternalAPI time.Duration
 }
 
 // DefaultTimeoutConfig returns default timeout configuration.

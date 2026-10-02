@@ -128,7 +128,7 @@ resource "aws_codepipeline" "main" {
         ConnectionArn    = var.codestar_connection_arn
         FullRepositoryId = var.repository_id
         BranchName       = var.branch_name
-      } : var.source_provider == "CodeCommit" ? {
+        } : var.source_provider == "CodeCommit" ? {
         RepositoryName = var.repository_name
         BranchName     = var.branch_name
       } : {}

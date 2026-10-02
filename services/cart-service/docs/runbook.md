@@ -22,7 +22,7 @@
                     │                          │                          │
                     ▼                          ▼                          ▼
              ┌─────────────┐          ┌─────────────┐          ┌─────────────┐
-             │  DynamoDB   │          │ EventBridge │          │    Redis    │
+             │  DynamoDB   │          │ EventBridge │          │ Secrets Mgr │
              └─────────────┘          └─────────────┘          └─────────────┘
 ```
 
@@ -30,8 +30,35 @@
 
 | Endpoint | Purpose | Expected Response |
 |----------|---------|-------------------|
-| `/health` | Liveness probe | 200 OK |
-| `/ready` | Readiness probe | 200 OK (when healthy) |
+| `/health` | Liveness probe (ALB target group) | 200 OK |
+| `/ready` | Readiness probe (checks DynamoDB) | 200 OK, or 503 when DynamoDB is unreachable |
+
+The container health check runs `/cart-service -health-check`, which probes `/health` from inside the task. The runtime image has no shell or `wget`.
+
+## Tasks Fail to Start
+
+**`ResourceInitializationError: unable to pull secrets`**: the JWT secret has no value yet. Set it as described in the service README, under "JWT signing key". The secret name is in the `jwt_secret_name` Terraform output.
+
+**`configuration validation failed`** in the logs means the service refuses to start on unsafe or malformed settings, for example:
+- a `JWT_SECRET_KEY` shorter than 32 bytes
+- `AUTH_ENABLED=false` outside dev
+- `CORS_ALLOWED_ORIGINS=*` outside dev
+- a malformed number or duration
+
+The log line names the offending variable.
+
+## Client Errors to Expect
+
+| Status | Meaning | Client action |
+|--------|---------|---------------|
+| 401 | Missing, invalid or expired JWT | Refresh the token |
+| 403 | The token's `sub` doesn't match `{userID}` in the path | Fix the caller |
+| 409 `CONFLICT` | Concurrent modification, or a stale `version` | Re-read the cart and retry |
+| 409 `IDEMPOTENCY_CONFLICT` | The same `Idempotency-Key` is still in flight | Retry later |
+| 422 | `Idempotency-Key` reused with a different body | Use a new key |
+| 429 | Per-user rate limit | Back off (`Retry-After`) |
+
+4xx responses are logged at debug level. Only 5xx responses are logged as errors.
 
 ## Common Issues
 

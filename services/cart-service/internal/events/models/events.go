@@ -41,10 +41,10 @@ type ItemUpdatedData struct {
 
 // CartClearedData represents data for cart.cleared event.
 type CartClearedData struct {
-	CartID         string `json:"cart_id"`
-	UserID         string `json:"user_id"`
-	ItemsRemoved   int    `json:"items_removed"`
-	PreviousTotal  int64  `json:"previous_total"`
+	CartID        string `json:"cart_id"`
+	UserID        string `json:"user_id"`
+	ItemsRemoved  int    `json:"items_removed"`
+	PreviousTotal int64  `json:"previous_total"`
 }
 
 // CartAbandonedData represents data for cart.abandoned event.

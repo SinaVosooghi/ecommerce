@@ -50,7 +50,7 @@ func main() {
 // The runtime image has no shell or wget, so the binary checks itself.
 func probeHealth(url string) int {
 	client := &http.Client{Timeout: 3 * time.Second}
-	resp, err := client.Get(url)
+	resp, err := client.Get(url) //nolint:gosec // url is the local health endpoint built from APP_PORT
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
 		return 1

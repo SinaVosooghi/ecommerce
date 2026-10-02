@@ -29,7 +29,7 @@ resource "aws_cloudwatch_event_rule" "cart_events" {
   event_bus_name = local.event_bus_name
 
   event_pattern = jsonencode({
-    source = [var.event_source]
+    source        = [var.event_source]
     "detail-type" = var.event_types
   })
 

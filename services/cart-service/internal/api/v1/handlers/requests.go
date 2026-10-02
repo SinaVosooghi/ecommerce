@@ -3,6 +3,7 @@ package handlers
 
 import (
 	"encoding/json"
+	stderrors "errors"
 	"net/http"
 	"regexp"
 
@@ -118,7 +119,8 @@ func validationErrors(err error) map[string]interface{} {
 	}
 
 	errs := make(map[string]interface{})
-	if validationErrs, ok := err.(validator.ValidationErrors); ok {
+	var validationErrs validator.ValidationErrors
+	if stderrors.As(err, &validationErrs) {
 		for _, e := range validationErrs {
 			errs[e.Field()] = e.Tag()
 		}
