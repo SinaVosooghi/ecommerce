@@ -141,6 +141,22 @@ module "eventbridge" {
 }
 
 #------------------------------------------------------------------------------
+# JWT signing key
+# Terraform creates the secret but never its value, so the key stays out of state.
+# Set it once per environment before the service can start, e.g.:
+#   aws secretsmanager put-secret-value --secret-id <jwt_secret_name output> \
+#     --secret-string "$(openssl rand -base64 48)"
+#------------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "jwt_secret_key" {
+  name        = "${var.project_name}/${var.environment}/${var.service_name}/jwt-secret-key"
+  description = "HS256 signing key for ${var.service_name} JWTs"
+
+  recovery_window_in_days = 7
+
+  tags = local.common_tags
+}
+
+#------------------------------------------------------------------------------
 # IAM
 #------------------------------------------------------------------------------
 module "iam" {
@@ -154,6 +170,7 @@ module "iam" {
   log_group_arn      = module.cloudwatch.log_group_arn
   dynamodb_table_arn = module.dynamodb.table_arn
   event_bus_arn      = module.eventbridge.event_bus_arn
+  secrets_arns       = [aws_secretsmanager_secret.jwt_secret_key.arn]
   enable_xray        = var.enable_xray
   enable_ecs_exec    = true # Enable for dev debugging
   tags               = local.common_tags
@@ -195,6 +212,10 @@ module "ecs" {
     EVENTBRIDGE_ENABLED = "true"
     EVENTBRIDGE_BUS_NAME = module.eventbridge.event_bus_name
     AWS_XRAY_ENABLED   = tostring(var.enable_xray)
+  }
+
+  secrets = {
+    JWT_SECRET_KEY = aws_secretsmanager_secret.jwt_secret_key.arn
   }
 
   tags = local.common_tags

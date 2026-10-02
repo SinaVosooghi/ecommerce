@@ -12,7 +12,15 @@ terraform init && terraform apply
 # 2. Deploy dev environment
 cd infrastructure/environments/dev
 terraform init && terraform apply
+
+# 3. Set the JWT signing key (first deploy only). Terraform creates the secret
+#    without a value so the key never lands in state; ECS tasks won't start until it is set.
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform output -raw jwt_secret_name)" \
+  --secret-string "$(openssl rand -base64 48)"
 ```
+
+For prod, also set `cors_allowed_origins` in `terraform.tfvars`. The service rejects `*` outside dev.
 
 ## Architecture
 

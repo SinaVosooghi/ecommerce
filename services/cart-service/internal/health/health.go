@@ -53,7 +53,7 @@ type CheckResult struct {
 func (h *Handler) LivenessHandler(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusOK)
-	json.NewEncoder(w).Encode(HealthResponse{
+	_ = json.NewEncoder(w).Encode(HealthResponse{
 		Status:    "ok",
 		Timestamp: time.Now().UTC(),
 	})
@@ -84,8 +84,10 @@ func (h *Handler) ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 		}
 
 		if err != nil {
+			// The endpoint is reachable through the load balancer, so do not echo the raw
+			// error: AWS errors can include account IDs and role ARNs.
 			result.Status = "error"
-			result.Message = err.Error()
+			result.Message = "check failed"
 			allHealthy = false
 		}
 
@@ -107,7 +109,7 @@ func (h *Handler) ReadinessHandler(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusServiceUnavailable)
 	}
 
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // RepositoryChecker checks repository connectivity.

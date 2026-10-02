@@ -47,3 +47,8 @@ output "api_endpoint" {
   description = "API endpoint URL"
   value       = "http://${module.alb.alb_dns_name}"
 }
+
+output "jwt_secret_name" {
+  description = "Secrets Manager secret holding the JWT signing key (set its value out-of-band)"
+  value       = aws_secretsmanager_secret.jwt_secret_key.name
+}

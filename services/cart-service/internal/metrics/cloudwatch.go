@@ -2,7 +2,10 @@ package metrics
 
 import (
 	"encoding/json"
+	"io"
 	"os"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 )
@@ -16,9 +19,10 @@ type CloudWatchConfig struct {
 
 // CloudWatchCollector implements CloudWatch Embedded Metric Format (EMF).
 type CloudWatchCollector struct {
-	namespace   string
-	dimensions  map[string]string
-	mu          sync.Mutex
+	namespace  string
+	dimensions map[string]string
+	out        io.Writer
+	mu         sync.Mutex
 }
 
 // NewCloudWatchCollector creates a new CloudWatch EMF collector.
@@ -29,6 +33,7 @@ func NewCloudWatchCollector(cfg CloudWatchConfig) *CloudWatchCollector {
 			"ServiceName": cfg.ServiceName,
 			"Environment": cfg.Environment,
 		},
+		out: os.Stdout,
 	}
 }
 
@@ -47,8 +52,8 @@ type EMFAWSBlock struct {
 
 // CloudWatchMetric represents a metric definition in EMF.
 type CloudWatchMetric struct {
-	Namespace  string           `json:"Namespace"`
-	Dimensions [][]string       `json:"Dimensions"`
+	Namespace  string             `json:"Namespace"`
+	Dimensions [][]string         `json:"Dimensions"`
 	Metrics    []MetricDefinition `json:"Metrics"`
 }
 
@@ -66,7 +71,7 @@ func (c *CloudWatchCollector) IncrementCounter(name string, labels map[string]st
 // ObserveHistogram records a histogram observation and outputs EMF.
 func (c *CloudWatchCollector) ObserveHistogram(name string, value float64, labels map[string]string) {
 	unit := "Seconds"
-	if contains(name, "bytes") {
+	if strings.Contains(name, "bytes") {
 		unit = "Bytes"
 	}
 	c.emitMetric(name, value, unit, labels)
@@ -97,6 +102,7 @@ func (c *CloudWatchCollector) emitMetric(name string, value float64, unit string
 	for k := range dimensions {
 		dimensionKeys = append(dimensionKeys, k)
 	}
+	slices.Sort(dimensionKeys)
 
 	// Build EMF output
 	emf := map[string]interface{}{
@@ -120,17 +126,11 @@ func (c *CloudWatchCollector) emitMetric(name string, value float64, unit string
 		emf[k] = v
 	}
 
-	// Output as JSON to stdout (CloudWatch agent picks this up)
-	output, _ := json.Marshal(emf)
-	os.Stdout.Write(output)
-	os.Stdout.Write([]byte("\n"))
-}
-
-func contains(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
+	// Output as one JSON line to stdout (CloudWatch agent picks this up). Metrics are
+	// best-effort, so encoding or write failures are dropped.
+	output, err := json.Marshal(emf)
+	if err != nil {
+		return
 	}
-	return false
+	_, _ = c.out.Write(append(output, '\n'))
 }

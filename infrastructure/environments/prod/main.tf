@@ -193,6 +193,22 @@ module "secrets" {
 }
 
 #------------------------------------------------------------------------------
+# JWT signing key
+# Terraform creates the secret but never its value, so the key stays out of state.
+# Set it once per environment before the service can start, e.g.:
+#   aws secretsmanager put-secret-value --secret-id <jwt_secret_name output> \
+#     --secret-string "$(openssl rand -base64 48)"
+#------------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "jwt_secret_key" {
+  name        = "${var.project_name}/${var.environment}/${var.service_name}/jwt-secret-key"
+  description = "HS256 signing key for ${var.service_name} JWTs"
+
+  recovery_window_in_days = 7
+
+  tags = local.common_tags
+}
+
+#------------------------------------------------------------------------------
 # IAM
 #------------------------------------------------------------------------------
 module "iam" {
@@ -206,7 +222,7 @@ module "iam" {
   log_group_arn      = module.cloudwatch.log_group_arn
   dynamodb_table_arn = module.dynamodb.table_arn
   event_bus_arn      = module.eventbridge.event_bus_arn
-  secrets_arns       = values(module.secrets.secret_arns)
+  secrets_arns       = concat(values(module.secrets.secret_arns), [aws_secretsmanager_secret.jwt_secret_key.arn])
   enable_xray        = true
   enable_ecs_exec    = false # Disable in prod
   tags               = local.common_tags
@@ -254,11 +270,15 @@ module "ecs" {
     AWS_XRAY_ENABLED     = "true"
     REDIS_ENABLED        = tostring(var.enable_redis)
     REDIS_URL            = var.enable_redis ? "redis://${module.elasticache.endpoint}:6379" : ""
+    CORS_ALLOWED_ORIGINS = join(",", var.cors_allowed_origins)
   }
 
-  secrets = var.enable_redis && var.redis_auth_token != "" ? {
-    REDIS_AUTH_TOKEN = module.secrets.secret_arns["redis-auth-token"]
-  } : {}
+  secrets = merge(
+    { JWT_SECRET_KEY = aws_secretsmanager_secret.jwt_secret_key.arn },
+    var.enable_redis && var.redis_auth_token != "" ? {
+      REDIS_AUTH_TOKEN = module.secrets.secret_arns["redis-auth-token"]
+    } : {}
+  )
 
   tags = local.common_tags
 }

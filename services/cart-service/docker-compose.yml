@@ -18,12 +18,16 @@ services:
       - AWS_SECRET_ACCESS_KEY=local
       - EVENTBRIDGE_ENABLED=false
       - REDIS_ENABLED=false
+      # Local only: auth is off so the API can be called without minting tokens.
+      # Set AUTH_ENABLED=true to exercise JWT auth with the dev key below.
+      - AUTH_ENABLED=false
+      - JWT_SECRET_KEY=local-dev-only-secret-change-me-0123456789
     depends_on:
       - dynamodb-local
     networks:
       - cart-network
     healthcheck:
-      test: ["CMD", "wget", "-q", "--spider", "http://localhost:8080/health"]
+      test: ["CMD", "/cart-service", "-health-check"]
       interval: 10s
       timeout: 5s
       retries: 3

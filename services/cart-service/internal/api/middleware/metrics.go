@@ -5,6 +5,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
@@ -14,7 +15,9 @@ type MetricsCollector interface {
 	ObserveHistogram(name string, value float64, labels map[string]string)
 }
 
-// Metrics provides request metrics collection middleware.
+// Metrics provides request metrics collection middleware. It must be mounted on a chi
+// router so the matched route pattern (not the raw URL) can be used as the path label;
+// raw paths contain user and item IDs and would create unbounded label cardinality.
 func Metrics(collector MetricsCollector) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -30,7 +33,7 @@ func Metrics(collector MetricsCollector) func(next http.Handler) http.Handler {
 			// Collect request metrics
 			labels := map[string]string{
 				"method":      r.Method,
-				"path":        r.URL.Path,
+				"path":        routePattern(r),
 				"status_code": strconv.Itoa(ww.Status()),
 			}
 
@@ -53,11 +56,12 @@ func Metrics(collector MetricsCollector) func(next http.Handler) http.Handler {
 	}
 }
 
-// NoOpMetricsCollector is a no-op implementation of MetricsCollector.
-type NoOpMetricsCollector struct{}
-
-// IncrementCounter does nothing.
-func (n *NoOpMetricsCollector) IncrementCounter(name string, labels map[string]string) {}
-
-// ObserveHistogram does nothing.
-func (n *NoOpMetricsCollector) ObserveHistogram(name string, value float64, labels map[string]string) {}
+// routePattern returns the matched chi route pattern, e.g. "/v1/cart/{userID}/items".
+func routePattern(r *http.Request) string {
+	if rctx := chi.RouteContext(r.Context()); rctx != nil {
+		if pattern := rctx.RoutePattern(); pattern != "" {
+			return pattern
+		}
+	}
+	return "unmatched"
+}

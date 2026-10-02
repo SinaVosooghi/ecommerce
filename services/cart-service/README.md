@@ -67,6 +67,26 @@ go run cmd/cart-service/main.go
 | PATCH | `/v1/cart/{userID}/items/{itemID}` | Update item quantity |
 | DELETE | `/v1/cart/{userID}/items/{itemID}` | Remove item from cart |
 | DELETE | `/v1/cart/{userID}` | Clear cart |
+| POST | `/v1/cart/{userID}/merge` | Merge a guest cart (`{"guest_id": "..."}`) into the user's cart |
+
+### Authentication and authorization
+
+All `/v1` routes require `Authorization: Bearer <JWT>`:
+
+- Tokens must be HS256, signed with `JWT_SECRET_KEY`, and carry an `exp` claim. If `JWT_ISSUER` or `JWT_AUDIENCE` is set, the token's `iss` and `aud` must match.
+- The token's `sub` claim must equal `{userID}` in the path. A token for one user gets `403` on another user's cart.
+- `AUTH_ENABLED=false` turns auth off. The service refuses to start that way unless `ENV_NAME=dev`.
+
+### Concurrency and retries
+
+- Every write is a conditional DynamoDB put on the cart `version`, so concurrent requests can't overwrite each other. The server retries a few times on contention, then returns `409 CONFLICT`. Clients should re-read the cart and retry.
+- `PATCH .../items/{itemID}` accepts an optional `version`. If the cart has changed since that version, the request fails with `409` instead of overwriting the newer state.
+- Send an `Idempotency-Key` header on `POST` and `PATCH` to make retries safe. Keys are scoped per user and stored in DynamoDB for `IDEMPOTENCY_TTL`.
+  - A repeat request replays the original response, marked with `X-Idempotent-Replayed: true`.
+  - Reusing a key with a different body returns `422`.
+  - Reusing a key while the original request is still in flight returns `409`.
+
+> **Pricing:** no catalog service exists yet, so the client-supplied `unit_price` is stored as-is (a warning is logged at startup). Plug a `cart.PriceValidator` into `cart.ServiceConfig.Prices` to use server-side prices.
 
 ## Configuration
 
@@ -74,12 +94,18 @@ go run cmd/cart-service/main.go
 |----------|-------------|---------|
 | `APP_PORT` | HTTP server port | 8080 |
 | `ENV_NAME` | Environment (dev/staging/prod) | dev |
+| `AUTH_ENABLED` | Require JWT auth on `/v1` (only `dev` may disable it) | true |
+| `JWT_SECRET_KEY` | HS256 signing key, at least 32 bytes. In AWS, ECS injects it from Secrets Manager | - |
+| `JWT_ISSUER` / `JWT_AUDIENCE` | Expected `iss` / `aud` claims (optional) | - |
+| `CORS_ALLOWED_ORIGINS` | Comma-separated browser origins. `*` is only allowed in dev; empty disables CORS | `*` in dev, empty otherwise |
+| `IDEMPOTENCY_ENABLED` / `IDEMPOTENCY_TTL` | Idempotency-Key support and retention | true / 24h |
+| `METRICS_ENABLED` | Emit request metrics as CloudWatch EMF on stdout | false |
 | `LOG_LEVEL` | Logging level | info |
 | `AWS_REGION` | AWS region | us-east-1 |
 | `DYNAMODB_TABLE` | DynamoDB table name | cart-service-carts |
 | `DYNAMODB_ENDPOINT` | DynamoDB endpoint (for local) | - |
 | `AWS_XRAY_ENABLED` | Enable X-Ray tracing | false |
-| `RATE_LIMIT_RPS` | Rate limit per second | 100 |
+| `RATE_LIMIT_RPS` / `RATE_LIMIT_BURST` | Per-user (or per-peer-IP when unauthenticated) rate limit | 100 / 200 |
 | `CIRCUIT_BREAKER_ENABLED` | Enable circuit breaker | true |
 | `EVENTBRIDGE_ENABLED` | Enable EventBridge events | true |
 | `EVENTBRIDGE_BUS_NAME` | EventBridge bus name | default |
@@ -137,8 +163,8 @@ go test ./internal/...
 # Run with coverage
 go test -cover ./internal/...
 
-# Run integration tests (requires Docker)
-go test ./tests/integration/... -tags=integration
+# Run integration tests (in-memory; they exercise the real router and middleware)
+go test -race ./tests/integration/...
 
 # Run load tests
 k6 run tests/load/scenarios/baseline.js
@@ -160,8 +186,21 @@ The service is designed for deployment on AWS ECS Fargate. See the infrastructur
 
 ### Health Checks
 
-- **Liveness** (`/health`): Always returns 200 OK
-- **Readiness** (`/ready`): Checks DynamoDB connectivity
+- **Liveness** (`/health`): Always returns 200 OK.
+- **Readiness** (`/ready`): Returns 503 when DynamoDB is unreachable.
+- **Container health check**: the runtime image is distroless (no shell or `wget`), so Docker and ECS run `/cart-service -health-check`, which probes `http://127.0.0.1:$APP_PORT/health`.
+
+### JWT signing key
+
+Terraform creates the `<project>/<env>/cart-service/jwt-secret-key` secret but never its value, so the key stays out of Terraform state. Set the value once per environment, before the first deploy:
+
+```bash
+aws secretsmanager put-secret-value \
+  --secret-id "$(terraform -chdir=infrastructure/environments/dev output -raw jwt_secret_name)" \
+  --secret-string "$(openssl rand -base64 48)"
+```
+
+ECS injects it as `JWT_SECRET_KEY`. Tasks fail to start until the secret has a value.
 
 ### IAM Permissions Required
 

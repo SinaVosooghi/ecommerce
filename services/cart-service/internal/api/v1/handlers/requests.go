@@ -11,8 +11,8 @@ import (
 )
 
 var (
-	validate    = validator.New()
-	uuidPattern = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
+	validate        = validator.New()
+	uuidPattern     = regexp.MustCompile(`^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$`)
 	alphanumPattern = regexp.MustCompile(`^[a-zA-Z0-9_-]+$`)
 )
 
@@ -45,6 +45,14 @@ func (r *AddItemRequest) Validate() error {
 		})
 	}
 	return nil
+}
+
+// Validate validates the request and returns an error if invalid.
+func (r *MergeCartRequest) Validate() error {
+	if err := validate.Struct(r); err != nil {
+		return errors.ErrValidation("Invalid request", validationErrors(err))
+	}
+	return ValidateUserID(r.GuestID)
 }
 
 // Validate validates the request and returns an error if invalid.
@@ -91,10 +99,10 @@ func decodeJSON(r *http.Request, v interface{}) error {
 	if r.Body == nil {
 		return errors.ErrValidation("Request body is required", nil)
 	}
-	
+
 	decoder := json.NewDecoder(r.Body)
 	decoder.DisallowUnknownFields()
-	
+
 	if err := decoder.Decode(v); err != nil {
 		return errors.ErrValidation("Invalid JSON", map[string]interface{}{
 			"error": err.Error(),
@@ -108,7 +116,7 @@ func validationErrors(err error) map[string]interface{} {
 	if err == nil {
 		return nil
 	}
-	
+
 	errs := make(map[string]interface{})
 	if validationErrs, ok := err.(validator.ValidationErrors); ok {
 		for _, e := range validationErrs {

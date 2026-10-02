@@ -3,15 +3,25 @@ package server
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"net/http"
+	"slices"
 	"time"
 
 	"github.com/go-chi/chi/v5"
-	"github.com/go-chi/chi/v5/middleware"
+	chimw "github.com/go-chi/chi/v5/middleware"
 	"github.com/go-chi/cors"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/api/middleware"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/api/v1/handlers"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/app"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/health"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/idempotency"
 )
+
+// requestTimeout bounds handler execution. It must stay below Config.WriteTimeout so the
+// timeout response can still be written.
+const requestTimeout = 10 * time.Second
 
 // Config holds server configuration.
 type Config struct {
@@ -22,6 +32,16 @@ type Config struct {
 	MaxHeaderBytes int
 }
 
+// Deps holds the collaborators the HTTP layer needs.
+type Deps struct {
+	Cart   *handlers.CartHandler
+	Health *health.Handler
+	// Optional: nil disables the corresponding middleware.
+	Metrics     middleware.MetricsCollector
+	RateLimiter *middleware.RateLimiter
+	Idempotency idempotency.Store
+}
+
 // Server wraps the HTTP server with application context.
 type Server struct {
 	httpServer *http.Server
@@ -30,115 +50,92 @@ type Server struct {
 }
 
 // New creates a new Server instance.
-func New(cfg Config, application *app.Application) (*Server, error) {
+func New(cfg Config, application *app.Application, deps Deps) (*Server, error) {
+	if application == nil || application.Config == nil || application.Logger == nil {
+		return nil, errors.New("server: application with config and logger is required")
+	}
+	if deps.Cart == nil || deps.Health == nil {
+		return nil, errors.New("server: cart and health handlers are required")
+	}
+
+	appCfg := application.Config
 	router := chi.NewRouter()
 
-	// Base middleware stack
-	router.Use(middleware.RequestID)
-	router.Use(middleware.RealIP)
-	router.Use(middleware.Recoverer)
-	router.Use(middleware.Timeout(60 * time.Second))
-
-	// CORS configuration
-	if application.Config != nil {
+	// Base middleware stack. Logging is outermost so every log line, including panics
+	// caught by Recovery, carries the request ID.
+	router.Use(middleware.Logger(application.Logger))
+	if deps.Metrics != nil {
+		router.Use(middleware.Metrics(deps.Metrics))
+	}
+	router.Use(middleware.Recovery(application.Logger))
+	router.Use(middleware.SecurityHeaders)
+	if len(appCfg.CORSAllowedOrigins) > 0 {
 		router.Use(cors.Handler(cors.Options{
-			AllowedOrigins:   application.Config.CORSAllowedOrigins,
-			AllowedMethods:   application.Config.CORSAllowedMethods,
-			AllowedHeaders:   application.Config.CORSAllowedHeaders,
-			ExposedHeaders:   []string{"Link", "X-Request-ID"},
-			AllowCredentials: true,
+			AllowedOrigins: appCfg.CORSAllowedOrigins,
+			AllowedMethods: appCfg.CORSAllowedMethods,
+			AllowedHeaders: appCfg.CORSAllowedHeaders,
+			ExposedHeaders: []string{"X-Request-ID", "X-Idempotent-Replayed"},
+			// Auth uses bearer tokens, not cookies. Never combine credentials with a wildcard origin.
+			AllowCredentials: !slices.Contains(appCfg.CORSAllowedOrigins, "*"),
 			MaxAge:           300,
 		}))
 	}
+	router.Use(middleware.RequestSizeLimit(appCfg.MaxRequestSize))
+	router.Use(chimw.Timeout(requestTimeout))
 
-	srv := &Server{
+	// Health check endpoints (no auth required)
+	router.Get("/health", deps.Health.LivenessHandler)
+	router.Get("/ready", deps.Health.ReadinessHandler)
+
+	// API v1 routes
+	router.Route("/v1", func(r chi.Router) {
+		if appCfg.AuthEnabled {
+			r.Use(middleware.JWTAuth(middleware.AuthConfig{
+				JWTSecretKey: appCfg.JWTSecretKey,
+				JWTIssuer:    appCfg.JWTIssuer,
+				JWTAudience:  appCfg.JWTAudience,
+			}))
+		}
+		// After auth, so authenticated callers are limited per user rather than per IP.
+		if deps.RateLimiter != nil {
+			r.Use(deps.RateLimiter.Middleware)
+		}
+		r.Use(middleware.ContentType("application/json"))
+
+		r.Route("/cart/{userID}", func(r chi.Router) {
+			if appCfg.AuthEnabled {
+				r.Use(middleware.RequireOwner("userID"))
+			}
+			// After the ownership check, so a replay can never bypass it.
+			r.Use(middleware.Idempotency(middleware.IdempotencyConfig{
+				Enabled: appCfg.IdempotencyEnabled,
+				TTL:     appCfg.IdempotencyTTL,
+				Store:   deps.Idempotency,
+			}))
+
+			h := deps.Cart
+			r.Get("/", h.GetCart)
+			r.Delete("/", h.ClearCart)
+			r.Post("/items", h.AddItem)
+			r.Patch("/items/{itemID}", h.UpdateItem)
+			r.Delete("/items/{itemID}", h.RemoveItem)
+			r.Post("/merge", h.MergeCart)
+		})
+	})
+
+	return &Server{
 		httpServer: &http.Server{
-			Addr:           fmt.Sprintf(":%d", cfg.Port),
-			Handler:        router,
-			ReadTimeout:    cfg.ReadTimeout,
-			WriteTimeout:   cfg.WriteTimeout,
-			IdleTimeout:    cfg.IdleTimeout,
-			MaxHeaderBytes: cfg.MaxHeaderBytes,
+			Addr:              fmt.Sprintf(":%d", cfg.Port),
+			Handler:           router,
+			ReadTimeout:       cfg.ReadTimeout,
+			ReadHeaderTimeout: cfg.ReadTimeout,
+			WriteTimeout:      cfg.WriteTimeout,
+			IdleTimeout:       cfg.IdleTimeout,
+			MaxHeaderBytes:    cfg.MaxHeaderBytes,
 		},
 		app:    application,
 		router: router,
-	}
-
-	// Register routes
-	srv.registerRoutes()
-
-	return srv, nil
-}
-
-// registerRoutes sets up all HTTP routes.
-func (s *Server) registerRoutes() {
-	// Health check endpoints (no auth required)
-	s.router.Get("/health", s.handleHealth)
-	s.router.Get("/ready", s.handleReady)
-
-	// API v1 routes
-	s.router.Route("/v1", func(r chi.Router) {
-		// Cart routes
-		r.Route("/cart/{userID}", func(r chi.Router) {
-			r.Get("/", s.handleGetCart)
-			r.Delete("/", s.handleClearCart)
-			r.Post("/items", s.handleAddItem)
-			r.Patch("/items/{itemID}", s.handleUpdateItem)
-			r.Delete("/items/{itemID}", s.handleRemoveItem)
-		})
-	})
-}
-
-// handleHealth is the liveness probe endpoint.
-func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ok"}`))
-}
-
-// handleReady is the readiness probe endpoint.
-func (s *Server) handleReady(w http.ResponseWriter, r *http.Request) {
-	if err := s.app.ReadinessCheck(r.Context()); err != nil {
-		w.Header().Set("Content-Type", "application/json")
-		w.WriteHeader(http.StatusServiceUnavailable)
-		w.Write([]byte(fmt.Sprintf(`{"status":"not ready","error":"%s"}`, err.Error())))
-		return
-	}
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusOK)
-	w.Write([]byte(`{"status":"ready"}`))
-}
-
-// Placeholder handlers - will be implemented in Phase 4
-func (s *Server) handleGetCart(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"not implemented"}`))
-}
-
-func (s *Server) handleClearCart(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"not implemented"}`))
-}
-
-func (s *Server) handleAddItem(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"not implemented"}`))
-}
-
-func (s *Server) handleUpdateItem(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"not implemented"}`))
-}
-
-func (s *Server) handleRemoveItem(w http.ResponseWriter, r *http.Request) {
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusNotImplemented)
-	w.Write([]byte(`{"error":"not implemented"}`))
+	}, nil
 }
 
 // ListenAndServe starts the HTTP server.

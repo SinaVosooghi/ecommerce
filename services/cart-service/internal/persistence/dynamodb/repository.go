@@ -2,7 +2,7 @@ package dynamodb
 
 import (
 	"context"
-	"fmt"
+	stderrors "errors"
 	"strconv"
 	"time"
 
@@ -34,17 +34,17 @@ func NewRepository(client *Client) *Repository {
 
 // cartRecord represents a cart stored in DynamoDB.
 type cartRecord struct {
-	PK        string          `dynamodbav:"PK"`
-	SK        string          `dynamodbav:"SK"`
-	Type      string          `dynamodbav:"type"`
-	ID        string          `dynamodbav:"id"`
-	UserID    string          `dynamodbav:"user_id"`
+	PK        string           `dynamodbav:"PK"`
+	SK        string           `dynamodbav:"SK"`
+	Type      string           `dynamodbav:"type"`
+	ID        string           `dynamodbav:"id"`
+	UserID    string           `dynamodbav:"user_id"`
 	Items     []cartItemRecord `dynamodbav:"items"`
-	Version   int64           `dynamodbav:"version"`
-	CreatedAt string          `dynamodbav:"created_at"`
-	UpdatedAt string          `dynamodbav:"updated_at"`
-	ExpiresAt string          `dynamodbav:"expires_at"`
-	TTL       int64           `dynamodbav:"ttl"`
+	Version   int64            `dynamodbav:"version"`
+	CreatedAt string           `dynamodbav:"created_at"`
+	UpdatedAt string           `dynamodbav:"updated_at"`
+	ExpiresAt string           `dynamodbav:"expires_at"`
+	TTL       int64            `dynamodbav:"ttl"`
 }
 
 // cartItemRecord represents a cart item stored in DynamoDB.
@@ -104,7 +104,8 @@ func (r *Repository) SaveCart(ctx context.Context, c *cart.Cart) error {
 	return nil
 }
 
-// SaveCartWithVersion saves a cart with optimistic locking.
+// SaveCartWithVersion saves a cart with optimistic locking. An expectedVersion of 0 means
+// the cart must not exist yet; otherwise the stored version must equal expectedVersion.
 func (r *Repository) SaveCartWithVersion(ctx context.Context, c *cart.Cart, expectedVersion int64) error {
 	record := cartToRecord(c)
 
@@ -113,30 +114,40 @@ func (r *Repository) SaveCartWithVersion(ctx context.Context, c *cart.Cart, expe
 		return errors.Wrap(errors.CodePersistenceError, "failed to marshal cart", err)
 	}
 
-	// Use conditional expression for optimistic locking
-	_, err = r.client.db.PutItem(ctx, &dynamodb.PutItemInput{
-		TableName:           aws.String(r.client.tableName),
-		Item:                item,
-		ConditionExpression: aws.String("attribute_not_exists(PK) OR version = :expected_version"),
-		ExpressionAttributeValues: map[string]types.AttributeValue{
+	input := &dynamodb.PutItemInput{
+		TableName:                           aws.String(r.client.tableName),
+		Item:                                item,
+		ReturnValuesOnConditionCheckFailure: types.ReturnValuesOnConditionCheckFailureAllOld,
+	}
+	if expectedVersion == 0 {
+		input.ConditionExpression = aws.String("attribute_not_exists(PK)")
+	} else {
+		input.ConditionExpression = aws.String("version = :expected_version")
+		input.ExpressionAttributeValues = map[string]types.AttributeValue{
 			":expected_version": &types.AttributeValueMemberN{Value: strconv.FormatInt(expectedVersion, 10)},
-		},
-	})
-	if err != nil {
-		// Check if it's a conditional check failed exception
+		}
+	}
+
+	if _, err = r.client.db.PutItem(ctx, input); err != nil {
 		var condErr *types.ConditionalCheckFailedException
-		if ok := isConditionalCheckFailedException(err, &condErr); ok {
-			// Get current version for error reporting
-			currentCart, getErr := r.GetCart(ctx, c.UserID)
-			if getErr != nil {
-				return errors.ErrConflict(expectedVersion, 0)
-			}
-			return errors.ErrConflict(expectedVersion, currentCart.Version)
+		if stderrors.As(err, &condErr) {
+			return errors.ErrConflict(expectedVersion, storedVersion(condErr.Item))
 		}
 		return errors.Wrap(errors.CodePersistenceError, "failed to save cart", err)
 	}
 
 	return nil
+}
+
+// storedVersion extracts the version from the item returned with a failed condition check.
+// It returns 0 when the item does not exist.
+func storedVersion(item map[string]types.AttributeValue) int64 {
+	if v, ok := item["version"].(*types.AttributeValueMemberN); ok {
+		if n, err := strconv.ParseInt(v.Value, 10, 64); err == nil {
+			return n
+		}
+	}
+	return 0
 }
 
 // DeleteCart deletes a cart by user ID.
@@ -154,7 +165,7 @@ func (r *Repository) DeleteCart(ctx context.Context, userID string) error {
 	})
 	if err != nil {
 		var condErr *types.ConditionalCheckFailedException
-		if ok := isConditionalCheckFailedException(err, &condErr); ok {
+		if stderrors.As(err, &condErr) {
 			return errors.ErrCartNotFound(userID)
 		}
 		return errors.Wrap(errors.CodePersistenceError, "failed to delete cart", err)
@@ -178,7 +189,7 @@ func cartToRecord(c *cart.Cart) *cartRecord {
 			ProductID: item.ProductID,
 			Quantity:  item.Quantity,
 			UnitPrice: item.UnitPrice,
-			AddedAt:   item.AddedAt.Format(time.RFC3339),
+			AddedAt:   item.AddedAt.Format(time.RFC3339Nano),
 		}
 	}
 
@@ -190,19 +201,21 @@ func cartToRecord(c *cart.Cart) *cartRecord {
 		UserID:    c.UserID,
 		Items:     items,
 		Version:   c.Version,
-		CreatedAt: c.CreatedAt.Format(time.RFC3339),
-		UpdatedAt: c.UpdatedAt.Format(time.RFC3339),
-		ExpiresAt: c.ExpiresAt.Format(time.RFC3339),
+		CreatedAt: c.CreatedAt.Format(time.RFC3339Nano),
+		UpdatedAt: c.UpdatedAt.Format(time.RFC3339Nano),
+		ExpiresAt: c.ExpiresAt.Format(time.RFC3339Nano),
 		TTL:       c.ExpiresAt.Unix(),
 	}
 }
 
+// recordToCart converts a stored record to a cart. time.RFC3339 parsing also accepts
+// the fractional seconds written by RFC3339Nano, so older rows still load.
 func recordToCart(r *cartRecord) (*cart.Cart, error) {
 	items := make([]cart.CartItem, len(r.Items))
 	for i, item := range r.Items {
 		addedAt, err := time.Parse(time.RFC3339, item.AddedAt)
 		if err != nil {
-			addedAt = time.Now().UTC()
+			return nil, errors.Wrap(errors.CodePersistenceError, "invalid item added_at", err)
 		}
 		items[i] = cart.CartItem{
 			ItemID:    item.ItemID,
@@ -213,19 +226,13 @@ func recordToCart(r *cartRecord) (*cart.Cart, error) {
 		}
 	}
 
-	createdAt, err := time.Parse(time.RFC3339, r.CreatedAt)
-	if err != nil {
-		createdAt = time.Now().UTC()
-	}
-
-	updatedAt, err := time.Parse(time.RFC3339, r.UpdatedAt)
-	if err != nil {
-		updatedAt = time.Now().UTC()
-	}
-
-	expiresAt, err := time.Parse(time.RFC3339, r.ExpiresAt)
-	if err != nil {
-		expiresAt = time.Now().UTC().Add(7 * 24 * time.Hour)
+	var times [3]time.Time
+	for i, value := range []string{r.CreatedAt, r.UpdatedAt, r.ExpiresAt} {
+		t, err := time.Parse(time.RFC3339, value)
+		if err != nil {
+			return nil, errors.Wrap(errors.CodePersistenceError, "invalid cart timestamp", err)
+		}
+		times[i] = t
 	}
 
 	return &cart.Cart{
@@ -233,30 +240,8 @@ func recordToCart(r *cartRecord) (*cart.Cart, error) {
 		UserID:    r.UserID,
 		Items:     items,
 		Version:   r.Version,
-		CreatedAt: createdAt,
-		UpdatedAt: updatedAt,
-		ExpiresAt: expiresAt,
+		CreatedAt: times[0],
+		UpdatedAt: times[1],
+		ExpiresAt: times[2],
 	}, nil
-}
-
-func isConditionalCheckFailedException(err error, target **types.ConditionalCheckFailedException) bool {
-	if err == nil {
-		return false
-	}
-	// Simple string check since errors.As might not work with AWS SDK errors
-	return fmt.Sprintf("%T", err) == "*types.ConditionalCheckFailedException" ||
-		contains(err.Error(), "ConditionalCheckFailed")
-}
-
-func contains(s, substr string) bool {
-	return len(s) >= len(substr) && (s == substr || len(s) > 0 && containsHelper(s, substr))
-}
-
-func containsHelper(s, substr string) bool {
-	for i := 0; i <= len(s)-len(substr); i++ {
-		if s[i:i+len(substr)] == substr {
-			return true
-		}
-	}
-	return false
 }

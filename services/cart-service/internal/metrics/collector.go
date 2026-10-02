@@ -2,6 +2,8 @@
 package metrics
 
 import (
+	"slices"
+	"strings"
 	"sync"
 )
 
@@ -15,15 +17,15 @@ type Collector interface {
 // Metric types
 const (
 	// Request metrics
-	MetricHTTPRequestsTotal          = "http_requests_total"
-	MetricHTTPRequestDuration        = "http_request_duration_seconds"
-	MetricHTTPRequestSize            = "http_request_size_bytes"
-	MetricHTTPResponseSize           = "http_response_size_bytes"
+	MetricHTTPRequestsTotal   = "http_requests_total"
+	MetricHTTPRequestDuration = "http_request_duration_seconds"
+	MetricHTTPRequestSize     = "http_request_size_bytes"
+	MetricHTTPResponseSize    = "http_response_size_bytes"
 
 	// Business metrics
-	MetricCartOperationsTotal        = "cart_operations_total"
-	MetricCartItemsTotal             = "cart_items_total"
-	MetricCartValueDollars           = "cart_value_dollars"
+	MetricCartOperationsTotal = "cart_operations_total"
+	MetricCartItemsTotal      = "cart_items_total"
+	MetricCartValueDollars    = "cart_value_dollars"
 
 	// Infrastructure metrics
 	MetricPersistenceOperationsTotal = "persistence_operations_total"
@@ -108,12 +110,20 @@ func (c *InMemoryCollector) Reset() {
 	c.gauges = make(map[string]float64)
 }
 
+// makeKey builds a deterministic key; label order must not depend on map iteration.
 func makeKey(name string, labels map[string]string) string {
-	key := name
-	for k, v := range labels {
-		key += ":" + k + "=" + v
+	keys := make([]string, 0, len(labels))
+	for k := range labels {
+		keys = append(keys, k)
 	}
-	return key
+	slices.Sort(keys)
+
+	var b strings.Builder
+	b.WriteString(name)
+	for _, k := range keys {
+		b.WriteString(":" + k + "=" + labels[k])
+	}
+	return b.String()
 }
 
 // NoOpCollector is a no-op implementation of Collector.

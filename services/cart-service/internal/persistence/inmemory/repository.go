@@ -11,8 +11,9 @@ import (
 
 // Repository is an in-memory implementation of the cart repository.
 type Repository struct {
-	carts map[string]*cart.Cart
-	mu    sync.RWMutex
+	carts     map[string]*cart.Cart
+	healthErr error
+	mu        sync.RWMutex
 }
 
 // NewRepository creates a new in-memory repository.
@@ -45,13 +46,17 @@ func (r *Repository) SaveCart(ctx context.Context, c *cart.Cart) error {
 	return nil
 }
 
-// SaveCartWithVersion saves a cart with optimistic locking.
+// SaveCartWithVersion saves a cart with optimistic locking. An expectedVersion of 0 means
+// the cart must not exist yet; otherwise the stored version must equal expectedVersion.
 func (r *Repository) SaveCartWithVersion(ctx context.Context, c *cart.Cart, expectedVersion int64) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
 	existing, ok := r.carts[c.UserID]
-	if ok && existing.Version != expectedVersion {
+	switch {
+	case !ok && expectedVersion != 0:
+		return errors.ErrConflict(expectedVersion, 0)
+	case ok && existing.Version != expectedVersion:
 		return errors.ErrConflict(expectedVersion, existing.Version)
 	}
 
@@ -72,9 +77,18 @@ func (r *Repository) DeleteCart(ctx context.Context, userID string) error {
 	return nil
 }
 
-// HealthCheck verifies repository is healthy (always returns nil for in-memory).
+// HealthCheck verifies repository is healthy. It returns the error set with SetHealthError.
 func (r *Repository) HealthCheck(ctx context.Context) error {
-	return nil
+	r.mu.RLock()
+	defer r.mu.RUnlock()
+	return r.healthErr
+}
+
+// SetHealthError makes HealthCheck fail with err (useful for testing readiness).
+func (r *Repository) SetHealthError(err error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.healthErr = err
 }
 
 // Clear removes all carts (useful for testing).
