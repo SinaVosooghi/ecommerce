@@ -68,9 +68,9 @@ variable "ecs_service_name" {
 
 # Build Configuration
 variable "buildspec_file" {
-  description = "Path to buildspec file"
+  description = "Path to the buildspec file, relative to the repository root"
   type        = string
-  default     = "buildspec-build.yml"
+  default     = "services/cart-service/buildspec-build.yml"
 }
 
 variable "build_timeout" {

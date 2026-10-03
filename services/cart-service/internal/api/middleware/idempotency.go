@@ -3,37 +3,37 @@ package middleware
 import (
 	"bytes"
 	"context"
-	"encoding/json"
+	"crypto/sha256"
+	"encoding/hex"
+	stderrors "errors"
+	"fmt"
 	"io"
 	"net/http"
-	"sync"
 	"time"
 
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/errors"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/idempotency"
 )
 
-// IdempotencyStore defines the interface for storing idempotency records.
-type IdempotencyStore interface {
-	Get(ctx context.Context, key string) (*IdempotencyRecord, error)
-	Set(ctx context.Context, key string, record *IdempotencyRecord, ttl time.Duration) error
-}
-
-// IdempotencyRecord represents a stored idempotency response.
-type IdempotencyRecord struct {
-	StatusCode int       `json:"status_code"`
-	Body       []byte    `json:"body"`
-	Headers    http.Header `json:"headers"`
-	CreatedAt  time.Time `json:"created_at"`
-}
+const (
+	// maxIdempotencyKeyLength bounds the client-supplied key.
+	maxIdempotencyKeyLength = 255
+	// idempotencyLockTTL bounds how long an in-flight reservation blocks retries if the
+	// instance processing it dies before completing.
+	idempotencyLockTTL = time.Minute
+)
 
 // IdempotencyConfig holds configuration for idempotency middleware.
 type IdempotencyConfig struct {
 	Enabled bool
 	TTL     time.Duration
-	Store   IdempotencyStore
+	Store   idempotency.Store
 }
 
-// Idempotency provides idempotency middleware for safe retries.
+// Idempotency deduplicates POST and PATCH requests that carry an Idempotency-Key header.
+// Keys are scoped to the authenticated user. A repeated key replays the stored response;
+// a key reused with a different request returns 422, and a key whose original request is
+// still running returns 409. Only 2xx responses are stored, so failed requests can be retried.
 func Idempotency(config IdempotencyConfig) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -48,58 +48,98 @@ func Idempotency(config IdempotencyConfig) func(next http.Handler) http.Handler 
 				return
 			}
 
-			// Get idempotency key from header
 			idempotencyKey := r.Header.Get("Idempotency-Key")
 			if idempotencyKey == "" {
 				next.ServeHTTP(w, r)
 				return
 			}
-
-			// Get user ID for key scoping
-			userID := r.Header.Get("X-User-ID")
-			if userID == "" {
-				userID = "anonymous"
-			}
-
-			// Create scoped key
-			scopedKey := userID + ":" + idempotencyKey
-
-			// Check for existing record
-			record, err := config.Store.Get(r.Context(), scopedKey)
-			if err == nil && record != nil {
-				// Return cached response
-				for key, values := range record.Headers {
-					for _, value := range values {
-						w.Header().Add(key, value)
-					}
-				}
-				w.Header().Set("X-Idempotent-Replayed", "true")
-				w.WriteHeader(record.StatusCode)
-				w.Write(record.Body)
+			if len(idempotencyKey) > maxIdempotencyKeyLength {
+				writeJSONError(w, http.StatusBadRequest, errors.CodeInvalidRequest, "Idempotency-Key is too long")
 				return
 			}
 
-			// Capture response
+			body, err := io.ReadAll(r.Body)
+			if err != nil {
+				var tooLarge *http.MaxBytesError
+				if stderrors.As(err, &tooLarge) {
+					writeJSONError(w, http.StatusRequestEntityTooLarge, errors.CodeInvalidRequest, "Request body too large")
+					return
+				}
+				writeJSONError(w, http.StatusBadRequest, errors.CodeInvalidRequest, "Failed to read request body")
+				return
+			}
+			r.Body = io.NopCloser(bytes.NewReader(body))
+
+			scopedKey := scopeKey(r, idempotencyKey)
+			fingerprint := requestFingerprint(r, body)
+
+			existing, err := config.Store.Reserve(r.Context(), scopedKey, fingerprint, idempotencyLockTTL)
+			if err != nil {
+				writeJSONError(w, http.StatusServiceUnavailable, errors.CodeServiceUnavailable, "Idempotency store unavailable")
+				return
+			}
+			if existing != nil {
+				replay(w, existing, fingerprint)
+				return
+			}
+
 			rw := &responseCapture{
 				ResponseWriter: w,
 				statusCode:     http.StatusOK,
 				body:           &bytes.Buffer{},
 			}
-
 			next.ServeHTTP(rw, r)
 
-			// Only cache successful responses
+			// Finish bookkeeping even if the client disconnected.
+			ctx := context.WithoutCancel(r.Context())
 			if rw.statusCode >= 200 && rw.statusCode < 300 {
-				newRecord := &IdempotencyRecord{
-					StatusCode: rw.statusCode,
-					Body:       rw.body.Bytes(),
-					Headers:    rw.Header().Clone(),
-					CreatedAt:  time.Now().UTC(),
-				}
-				config.Store.Set(r.Context(), scopedKey, newRecord, config.TTL)
+				_ = config.Store.Complete(ctx, scopedKey, &idempotency.Record{
+					Fingerprint: fingerprint,
+					StatusCode:  rw.statusCode,
+					ContentType: rw.Header().Get("Content-Type"),
+					Body:        rw.body.Bytes(),
+				}, config.TTL)
+			} else {
+				_ = config.Store.Release(ctx, scopedKey)
 			}
 		})
 	}
+}
+
+func replay(w http.ResponseWriter, record *idempotency.Record, fingerprint string) {
+	switch {
+	case record.Fingerprint != fingerprint:
+		writeJSONError(w, http.StatusUnprocessableEntity, errors.CodeIdempotencyConflict,
+			"Idempotency-Key was already used for a different request")
+	case !record.Completed:
+		writeJSONError(w, http.StatusConflict, errors.CodeIdempotencyConflict,
+			"A request with this Idempotency-Key is still being processed")
+	default:
+		if record.ContentType != "" {
+			w.Header().Set("Content-Type", record.ContentType)
+		}
+		w.Header().Set("X-Idempotent-Replayed", "true")
+		w.WriteHeader(record.StatusCode)
+		_, _ = w.Write(record.Body)
+	}
+}
+
+// scopeKey namespaces the client key by the authenticated user. The length prefix keeps
+// the encoding unambiguous for any user or key contents.
+func scopeKey(r *http.Request, key string) string {
+	user := "anonymous"
+	if claims := GetUserFromContext(r.Context()); claims != nil {
+		user = claims.Subject
+	}
+	return fmt.Sprintf("%d:%s:%s", len(user), user, key)
+}
+
+// requestFingerprint identifies a request by method, path and body.
+func requestFingerprint(r *http.Request, body []byte) string {
+	h := sha256.New()
+	h.Write([]byte(r.Method + " " + r.URL.Path + "\n"))
+	h.Write(body)
+	return hex.EncodeToString(h.Sum(nil))
 }
 
 // responseCapture captures the response for idempotency storage.
@@ -119,99 +159,16 @@ func (r *responseCapture) Write(b []byte) (int, error) {
 	return r.ResponseWriter.Write(b)
 }
 
-// InMemoryIdempotencyStore provides an in-memory implementation of IdempotencyStore.
-type InMemoryIdempotencyStore struct {
-	records map[string]*storedRecord
-	mu      sync.RWMutex
-}
-
-type storedRecord struct {
-	record    *IdempotencyRecord
-	expiresAt time.Time
-}
-
-// NewInMemoryIdempotencyStore creates a new in-memory idempotency store.
-func NewInMemoryIdempotencyStore() *InMemoryIdempotencyStore {
-	store := &InMemoryIdempotencyStore{
-		records: make(map[string]*storedRecord),
-	}
-	// Start cleanup goroutine
-	go store.cleanup()
-	return store
-}
-
-// Get retrieves an idempotency record by key.
-func (s *InMemoryIdempotencyStore) Get(ctx context.Context, key string) (*IdempotencyRecord, error) {
-	s.mu.RLock()
-	defer s.mu.RUnlock()
-
-	stored, ok := s.records[key]
-	if !ok {
-		return nil, errors.New(errors.CodeCartNotFound, "Record not found")
-	}
-
-	if time.Now().After(stored.expiresAt) {
-		return nil, errors.New(errors.CodeCartNotFound, "Record expired")
-	}
-
-	return stored.record, nil
-}
-
-// Set stores an idempotency record.
-func (s *InMemoryIdempotencyStore) Set(ctx context.Context, key string, record *IdempotencyRecord, ttl time.Duration) error {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-
-	s.records[key] = &storedRecord{
-		record:    record,
-		expiresAt: time.Now().Add(ttl),
-	}
-	return nil
-}
-
-// cleanup periodically removes expired records.
-func (s *InMemoryIdempotencyStore) cleanup() {
-	ticker := time.NewTicker(5 * time.Minute)
-	defer ticker.Stop()
-
-	for range ticker.C {
-		s.mu.Lock()
-		now := time.Now()
-		for key, stored := range s.records {
-			if now.After(stored.expiresAt) {
-				delete(s.records, key)
-			}
-		}
-		s.mu.Unlock()
-	}
-}
-
 // IdempotencyKeyRequired is middleware that requires an idempotency key for certain methods.
 func IdempotencyKeyRequired(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.Method == http.MethodPost || r.Method == http.MethodPatch {
 			if r.Header.Get("Idempotency-Key") == "" {
-				w.Header().Set("Content-Type", "application/json")
-				w.WriteHeader(http.StatusBadRequest)
-				json.NewEncoder(w).Encode(map[string]interface{}{
-					"code":    errors.CodeInvalidRequest,
-					"message": "Idempotency-Key header is required for this request",
-				})
+				writeJSONError(w, http.StatusBadRequest, errors.CodeInvalidRequest,
+					"Idempotency-Key header is required for this request")
 				return
 			}
 		}
 		next.ServeHTTP(w, r)
 	})
-}
-
-// drainBody reads and returns the body, allowing it to be read again.
-func drainBody(body io.ReadCloser) ([]byte, io.ReadCloser, error) {
-	if body == nil {
-		return nil, nil, nil
-	}
-	data, err := io.ReadAll(body)
-	if err != nil {
-		return nil, body, err
-	}
-	return data, io.NopCloser(bytes.NewReader(data)), nil
 }

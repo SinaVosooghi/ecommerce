@@ -84,9 +84,9 @@ resource "aws_elasticache_replication_group" "main" {
   subnet_group_name    = aws_elasticache_subnet_group.main[0].name
   security_group_ids   = [aws_security_group.redis[0].id]
 
-  engine               = "redis"
-  engine_version       = var.engine_version
-  
+  engine         = "redis"
+  engine_version = var.engine_version
+
   automatic_failover_enabled = var.num_cache_clusters > 1 ? true : false
   multi_az_enabled           = var.num_cache_clusters > 1 ? var.multi_az_enabled : false
 

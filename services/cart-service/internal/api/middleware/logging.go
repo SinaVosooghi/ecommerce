@@ -10,6 +10,9 @@ import (
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
 )
 
+// maxRequestIDLength bounds client-supplied request IDs echoed into logs and headers.
+const maxRequestIDLength = 128
+
 // Logger is a middleware that logs HTTP requests.
 func Logger(logger *logging.Logger) func(next http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
@@ -18,7 +21,7 @@ func Logger(logger *logging.Logger) func(next http.Handler) http.Handler {
 
 			// Generate or extract request ID
 			requestID := r.Header.Get("X-Request-ID")
-			if requestID == "" {
+			if requestID == "" || len(requestID) > maxRequestIDLength {
 				requestID = uuid.New().String()
 			}
 
@@ -54,7 +57,7 @@ func Logger(logger *logging.Logger) func(next http.Handler) http.Handler {
 func RequestID(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requestID := r.Header.Get("X-Request-ID")
-		if requestID == "" {
+		if requestID == "" || len(requestID) > maxRequestIDLength {
 			requestID = uuid.New().String()
 		}
 

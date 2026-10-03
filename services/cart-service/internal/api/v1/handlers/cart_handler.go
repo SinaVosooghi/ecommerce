@@ -1,10 +1,12 @@
 package handlers
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/core/cart"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/errors"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
 )
 
@@ -22,6 +24,17 @@ func NewCartHandler(service *cart.Service, logger *logging.Logger) *CartHandler 
 	}
 }
 
+// logFailure logs server-side failures at error level. Client errors (4xx) such as
+// validation failures or version conflicts are expected and only logged at debug level.
+func (h *CartHandler) logFailure(ctx context.Context, err error, msg string) {
+	logger := h.logger.WithContext(ctx).WithError(err)
+	if appErr, ok := errors.IsAppError(err); ok && appErr.HTTPStatus < http.StatusInternalServerError {
+		logger.Debug(msg)
+		return
+	}
+	logger.Error(msg)
+}
+
 // GetCart handles GET /v1/cart/{userID}
 func (h *CartHandler) GetCart(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
@@ -36,7 +49,7 @@ func (h *CartHandler) GetCart(w http.ResponseWriter, r *http.Request) {
 	// Get cart
 	c, err := h.service.GetCart(ctx, userID)
 	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to get cart")
+		h.logFailure(ctx, err, "Failed to get cart")
 		writeError(w, err)
 		return
 	}
@@ -44,7 +57,9 @@ func (h *CartHandler) GetCart(w http.ResponseWriter, r *http.Request) {
 	writeSuccess(w, NewCartResponse(c))
 }
 
-// AddItem handles POST /v1/cart/{userID}/items
+// AddItem handles POST /v1/cart/{userID}/items.
+// Unless the service is configured with a PriceValidator, the client-supplied
+// unit_price is stored as-is.
 func (h *CartHandler) AddItem(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 	userID := chi.URLParam(r, "userID")
@@ -75,7 +90,7 @@ func (h *CartHandler) AddItem(w http.ResponseWriter, r *http.Request) {
 		UnitPrice: req.UnitPrice,
 	})
 	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to add item")
+		h.logFailure(ctx, err, "Failed to add item")
 		writeError(w, err)
 		return
 	}
@@ -119,7 +134,7 @@ func (h *CartHandler) UpdateItem(w http.ResponseWriter, r *http.Request) {
 		ExpectedVersion: req.Version,
 	})
 	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to update item")
+		h.logFailure(ctx, err, "Failed to update item")
 		writeError(w, err)
 		return
 	}
@@ -146,7 +161,7 @@ func (h *CartHandler) RemoveItem(w http.ResponseWriter, r *http.Request) {
 	// Remove item
 	c, err := h.service.RemoveItem(ctx, userID, itemID)
 	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to remove item")
+		h.logFailure(ctx, err, "Failed to remove item")
 		writeError(w, err)
 		return
 	}
@@ -167,7 +182,7 @@ func (h *CartHandler) ClearCart(w http.ResponseWriter, r *http.Request) {
 
 	// Clear cart
 	if err := h.service.ClearCart(ctx, userID); err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to clear cart")
+		h.logFailure(ctx, err, "Failed to clear cart")
 		writeError(w, err)
 		return
 	}
@@ -193,10 +208,16 @@ func (h *CartHandler) MergeCart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Validate request
+	if err := req.Validate(); err != nil {
+		writeError(w, err)
+		return
+	}
+
 	// Merge carts
 	c, err := h.service.MergeGuestCart(ctx, userID, req.GuestID)
 	if err != nil {
-		h.logger.WithContext(ctx).WithError(err).Error("Failed to merge cart")
+		h.logFailure(ctx, err, "Failed to merge cart")
 		writeError(w, err)
 		return
 	}

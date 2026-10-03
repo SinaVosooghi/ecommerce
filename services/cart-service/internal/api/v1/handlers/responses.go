@@ -72,9 +72,10 @@ func NewCartResponse(c *cart.Cart) *CartResponse {
 func writeJSON(w http.ResponseWriter, status int, data interface{}) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
-	
+
 	if data != nil {
-		json.NewEncoder(w).Encode(data)
+		// The status line is already sent; a failed write means the client went away.
+		_ = json.NewEncoder(w).Encode(data)
 	}
 }
 

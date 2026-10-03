@@ -1,69 +1,104 @@
 package middleware
 
 import (
-	"encoding/json"
+	"context"
+	"net"
 	"net/http"
 	"sync"
+	"time"
 
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/errors"
 	"golang.org/x/time/rate"
 )
 
-// RateLimiter provides rate limiting middleware.
+const (
+	// limiterIdleTTL is how long an unused per-client limiter is kept before eviction.
+	limiterIdleTTL = 10 * time.Minute
+	// limiterSweepInterval is how often idle limiters are evicted.
+	limiterSweepInterval = time.Minute
+)
+
+// RateLimiter provides per-client token-bucket rate limiting.
 type RateLimiter struct {
-	limiters map[string]*rate.Limiter
-	mu       sync.RWMutex
+	limiters map[string]*clientLimiter
+	mu       sync.Mutex
 	rps      rate.Limit
 	burst    int
+	now      func() time.Time
 }
 
-// NewRateLimiter creates a new rate limiter.
-func NewRateLimiter(rps int, burst int) *RateLimiter {
-	return &RateLimiter{
-		limiters: make(map[string]*rate.Limiter),
+type clientLimiter struct {
+	limiter  *rate.Limiter
+	lastSeen time.Time
+}
+
+// NewRateLimiter creates a new rate limiter. Idle client entries are evicted in the
+// background until ctx is cancelled.
+func NewRateLimiter(ctx context.Context, rps int, burst int) *RateLimiter {
+	rl := &RateLimiter{
+		limiters: make(map[string]*clientLimiter),
 		rps:      rate.Limit(rps),
 		burst:    burst,
+		now:      time.Now,
 	}
+	go rl.sweepLoop(ctx)
+	return rl
 }
 
 // getLimiter returns a rate limiter for the given key.
 func (rl *RateLimiter) getLimiter(key string) *rate.Limiter {
-	rl.mu.RLock()
-	limiter, exists := rl.limiters[key]
-	rl.mu.RUnlock()
-
-	if exists {
-		return limiter
-	}
-
 	rl.mu.Lock()
 	defer rl.mu.Unlock()
 
-	// Double-check after acquiring write lock
-	if limiter, exists = rl.limiters[key]; exists {
-		return limiter
+	cl, ok := rl.limiters[key]
+	if !ok {
+		cl = &clientLimiter{limiter: rate.NewLimiter(rl.rps, rl.burst)}
+		rl.limiters[key] = cl
 	}
+	cl.lastSeen = rl.now()
+	return cl.limiter
+}
 
-	limiter = rate.NewLimiter(rl.rps, rl.burst)
-	rl.limiters[key] = limiter
-	return limiter
+func (rl *RateLimiter) sweepLoop(ctx context.Context) {
+	ticker := time.NewTicker(limiterSweepInterval)
+	defer ticker.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-ticker.C:
+			rl.sweep()
+		}
+	}
+}
+
+// sweep evicts limiters that have been idle longer than limiterIdleTTL.
+func (rl *RateLimiter) sweep() {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+
+	cutoff := rl.now().Add(-limiterIdleTTL)
+	for key, cl := range rl.limiters {
+		if cl.lastSeen.Before(cutoff) {
+			delete(rl.limiters, key)
+		}
+	}
+}
+
+// Len returns the number of tracked clients.
+func (rl *RateLimiter) Len() int {
+	rl.mu.Lock()
+	defer rl.mu.Unlock()
+	return len(rl.limiters)
 }
 
 // Middleware returns the rate limiting middleware.
 func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Get client identifier (IP address or user ID)
-		key := getClientKey(r)
-
-		limiter := rl.getLimiter(key)
-		if !limiter.Allow() {
-			w.Header().Set("Content-Type", "application/json")
+		if !rl.getLimiter(getClientKey(r)).Allow() {
 			w.Header().Set("Retry-After", "1")
-			w.WriteHeader(http.StatusTooManyRequests)
-			json.NewEncoder(w).Encode(map[string]interface{}{
-				"code":    errors.CodeRateLimited,
-				"message": "Too many requests, please try again later",
-			})
+			writeJSONError(w, http.StatusTooManyRequests, errors.CodeRateLimited, "Too many requests, please try again later")
 			return
 		}
 
@@ -71,26 +106,17 @@ func (rl *RateLimiter) Middleware(next http.Handler) http.Handler {
 	})
 }
 
-// getClientKey extracts the client identifier from the request.
+// getClientKey identifies the caller. Authenticated requests are keyed by the verified
+// token subject; otherwise the TCP peer address is used. Client-supplied headers such as
+// X-Forwarded-For are deliberately ignored because they can be spoofed to evade limits.
 func getClientKey(r *http.Request) string {
-	// Try to get user ID from context first (set by auth middleware)
-	if userID := r.Header.Get("X-User-ID"); userID != "" {
-		return "user:" + userID
+	if claims := GetUserFromContext(r.Context()); claims != nil {
+		return "user:" + claims.Subject
 	}
 
-	// Fall back to IP address
-	ip := r.Header.Get("X-Forwarded-For")
-	if ip == "" {
-		ip = r.Header.Get("X-Real-IP")
+	host, _, err := net.SplitHostPort(r.RemoteAddr)
+	if err != nil {
+		host = r.RemoteAddr
 	}
-	if ip == "" {
-		ip = r.RemoteAddr
-	}
-	return "ip:" + ip
-}
-
-// RateLimit creates a simple rate limit middleware with default settings.
-func RateLimit(rps int, burst int) func(next http.Handler) http.Handler {
-	limiter := NewRateLimiter(rps, burst)
-	return limiter.Middleware
+	return "ip:" + host
 }

@@ -19,11 +19,11 @@ const (
 	CodeIdempotencyConflict = "IDEMPOTENCY_CONFLICT"
 
 	// Server errors (5xx)
-	CodeInternalError       = "INTERNAL_ERROR"
-	CodeServiceUnavailable  = "SERVICE_UNAVAILABLE"
-	CodePersistenceError    = "PERSISTENCE_ERROR"
-	CodeEventPublishError   = "EVENT_PUBLISH_ERROR"
-	CodeInventoryError      = "INVENTORY_ERROR"
+	CodeInternalError         = "INTERNAL_ERROR"
+	CodeServiceUnavailable    = "SERVICE_UNAVAILABLE"
+	CodePersistenceError      = "PERSISTENCE_ERROR"
+	CodeEventPublishError     = "EVENT_PUBLISH_ERROR"
+	CodeInventoryError        = "INVENTORY_ERROR"
 	CodeInventoryInsufficient = "INVENTORY_INSUFFICIENT"
 )
 

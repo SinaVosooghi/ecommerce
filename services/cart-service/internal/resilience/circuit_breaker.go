@@ -10,13 +10,13 @@ import (
 
 // CircuitBreakerConfig holds circuit breaker configuration.
 type CircuitBreakerConfig struct {
-	Name              string
-	MaxRequests       uint32        // Max requests allowed in half-open state
-	Interval          time.Duration // Cyclic period for clearing counts
-	Timeout           time.Duration // Time to wait before transitioning to half-open
-	FailureThreshold  uint32        // Failures before opening
-	SuccessThreshold  uint32        // Successes needed to close
-	FailureRatio      float64       // Ratio of failures to total requests
+	Name             string
+	MaxRequests      uint32        // Max requests allowed in half-open state
+	Interval         time.Duration // Cyclic period for clearing counts
+	Timeout          time.Duration // Time to wait before transitioning to half-open
+	FailureThreshold uint32        // Failures before opening
+	SuccessThreshold uint32        // Successes needed to close
+	FailureRatio     float64       // Ratio of failures to total requests
 }
 
 // DefaultCircuitBreakerConfig returns default configuration.

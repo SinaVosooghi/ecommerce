@@ -1,9 +1,13 @@
+# CodeBuild spec for the cart-service image. The CodePipeline source is the whole
+# repository, so commands first change into the service directory.
 version: 0.2
 
 env:
+  shell: bash
   variables:
-    GO_VERSION: "1.22"
     SERVICE_NAME: "cart-service"
+    SERVICE_DIR: "services/cart-service"
+    GOLANGCI_LINT_VERSION: "v2.14.0"
   parameter-store:
     DOCKER_HUB_USER: "/codebuild/docker-hub-user"
     DOCKER_HUB_TOKEN: "/codebuild/docker-hub-token"
@@ -13,23 +17,30 @@ env:
 
 phases:
   install:
-    runtime-versions:
-      golang: ${GO_VERSION}
     commands:
-      - echo "Installing dependencies..."
+      - set -o pipefail
+      - cd "$CODEBUILD_SRC_DIR/$SERVICE_DIR"
+      # Install exactly the Go version declared in go.mod instead of relying on the
+      # versions preinstalled in the CodeBuild image.
+      - GO_VERSION=$(sed -n 's/^go //p' go.mod)
+      - echo "Installing Go ${GO_VERSION}..."
+      - mkdir -p /opt/go && curl -sSfL "https://go.dev/dl/go${GO_VERSION}.linux-amd64.tar.gz" | tar -C /opt/go -xz --strip-components=1
+      - export PATH="/opt/go/bin:$(/opt/go/bin/go env GOPATH)/bin:$PATH"
       - go version
+      - go install "github.com/golangci/golangci-lint/v2/cmd/golangci-lint@${GOLANGCI_LINT_VERSION}"
 
   pre_build:
     commands:
       - echo "Pre-build phase started at $(date)"
       - echo "Logging in to Amazon ECR..."
-      - aws ecr get-login-password --region $AWS_DEFAULT_REGION | docker login --username AWS --password-stdin $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com
-      
-      # Set image tag
+      - aws ecr get-login-password --region "$AWS_DEFAULT_REGION" | docker login --username AWS --password-stdin "$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com"
+      # Authenticated pulls avoid Docker Hub rate limits for the base images.
+      - echo "$DOCKER_HUB_TOKEN" | docker login --username "$DOCKER_HUB_USER" --password-stdin
+
+      # Images are tagged by commit only; there is no mutable "latest" tag.
       - export IMAGE_TAG=${CODEBUILD_RESOLVED_SOURCE_VERSION:0:8}
       - export IMAGE_URI=$AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:$IMAGE_TAG
-      
-      # Download dependencies
+
       - echo "Downloading Go modules..."
       - go mod download
       - go mod verify
@@ -37,44 +48,31 @@ phases:
   build:
     commands:
       - echo "Build phase started at $(date)"
-      
-      # Run linting
+
       - echo "Running linter..."
-      - |
-        if command -v golangci-lint &> /dev/null; then
-          golangci-lint run ./...
-        else
-          echo "golangci-lint not installed, skipping"
-        fi
-      
-      # Run unit tests
-      - echo "Running unit tests..."
-      - go test -v -race -coverprofile=coverage.out ./internal/...
-      - go tool cover -func=coverage.out
-      
-      # Build binary
-      - echo "Building binary..."
-      - CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-w -s -X main.version=$IMAGE_TAG" -o bin/cart-service ./cmd/cart-service
-      
-      # Build Docker image
+      - golangci-lint run ./...
+
+      - echo "Running tests..."
+      - go test -race -count=1 -coverprofile=coverage.out ./...
+      - go tool cover -func=coverage.out | tail -1
+
+      - echo "Scanning for known vulnerabilities..."
+      - go tool govulncheck ./...
+
       - echo "Building Docker image..."
-      - docker build -t $SERVICE_NAME:$IMAGE_TAG .
-      - docker tag $SERVICE_NAME:$IMAGE_TAG $IMAGE_URI
-      - docker tag $SERVICE_NAME:$IMAGE_TAG $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
+      - docker build --build-arg VERSION="$IMAGE_TAG" -t "$IMAGE_URI" .
 
   post_build:
     commands:
       - echo "Post-build phase started at $(date)"
-      
-      # Push Docker image
+
       - echo "Pushing Docker image..."
-      - docker push $IMAGE_URI
-      - docker push $AWS_ACCOUNT_ID.dkr.ecr.$AWS_DEFAULT_REGION.amazonaws.com/$SERVICE_NAME:latest
-      
+      - docker push "$IMAGE_URI"
+
       # Create image definitions file for ECS
       - echo "Creating imagedefinitions.json..."
-      - printf '[{"name":"%s","imageUri":"%s"}]' $SERVICE_NAME $IMAGE_URI > imagedefinitions.json
-      
+      - printf '[{"name":"%s","imageUri":"%s"}]' "$SERVICE_NAME" "$IMAGE_URI" > imagedefinitions.json
+
       # Create appspec.yml for CodeDeploy
       - echo "Creating appspec.yml..."
       - |
@@ -89,22 +87,16 @@ phases:
                   ContainerName: "$SERVICE_NAME"
                   ContainerPort: 8080
         EOF
-      
+
       - echo "Build completed at $(date)"
 
 artifacts:
+  base-directory: services/cart-service
   files:
     - imagedefinitions.json
     - appspec.yml
-    - bin/cart-service
   discard-paths: no
 
 cache:
   paths:
-    - '/go/pkg/mod/**/*'
-
-reports:
-  coverage-report:
-    files:
-      - coverage.out
-    file-format: COBERTURAXML
+    - '/root/go/pkg/mod/**/*'

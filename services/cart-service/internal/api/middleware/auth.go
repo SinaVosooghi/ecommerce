@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/errors"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
@@ -19,10 +20,9 @@ type AuthConfig struct {
 	SkipPaths    []string // Paths to skip authentication
 }
 
-// UserClaims represents the claims in a JWT token.
+// UserClaims represents the claims in a JWT token. The user ID is the standard "sub" claim.
 type UserClaims struct {
 	jwt.RegisteredClaims
-	UserID   string   `json:"sub"`
 	Email    string   `json:"email,omitempty"`
 	TenantID string   `json:"tenant_id,omitempty"`
 	Groups   []string `json:"cognito:groups,omitempty"`
@@ -35,12 +35,61 @@ const (
 	userContextKey contextKey = "user"
 )
 
+// newTokenParser returns a parser that only accepts HS256 tokens with an expiry and,
+// when configured, the expected issuer and audience.
+func newTokenParser(config AuthConfig) *jwt.Parser {
+	opts := []jwt.ParserOption{
+		jwt.WithValidMethods([]string{jwt.SigningMethodHS256.Alg()}),
+		jwt.WithExpirationRequired(),
+	}
+	if config.JWTIssuer != "" {
+		opts = append(opts, jwt.WithIssuer(config.JWTIssuer))
+	}
+	if config.JWTAudience != "" {
+		opts = append(opts, jwt.WithAudience(config.JWTAudience))
+	}
+	return jwt.NewParser(opts...)
+}
+
+// parseBearer validates the bearer token in the Authorization header and returns its claims.
+func parseBearer(parser *jwt.Parser, key []byte, r *http.Request) (*UserClaims, string) {
+	authHeader := r.Header.Get("Authorization")
+	if authHeader == "" {
+		return nil, "Authorization header is required"
+	}
+
+	scheme, tokenString, ok := strings.Cut(authHeader, " ")
+	if !ok || !strings.EqualFold(scheme, "bearer") || tokenString == "" {
+		return nil, "Invalid authorization header format"
+	}
+
+	claims := &UserClaims{}
+	_, err := parser.ParseWithClaims(tokenString, claims, func(*jwt.Token) (interface{}, error) {
+		return key, nil
+	})
+	if err != nil {
+		return nil, "Invalid token"
+	}
+	if claims.Subject == "" {
+		return nil, "Token has no subject"
+	}
+	return claims, ""
+}
+
+func withUser(r *http.Request, claims *UserClaims) *http.Request {
+	ctx := context.WithValue(r.Context(), userContextKey, claims)
+	ctx = logging.ContextWithUserID(ctx, claims.Subject)
+	return r.WithContext(ctx)
+}
+
 // JWTAuth provides JWT authentication middleware.
 func JWTAuth(config AuthConfig) func(next http.Handler) http.Handler {
 	skipPaths := make(map[string]bool)
 	for _, path := range config.SkipPaths {
 		skipPaths[path] = true
 	}
+	parser := newTokenParser(config)
+	key := []byte(config.JWTSecretKey)
 
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -50,75 +99,13 @@ func JWTAuth(config AuthConfig) func(next http.Handler) http.Handler {
 				return
 			}
 
-			// Extract token from Authorization header
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				writeAuthError(w, "Authorization header is required")
+			claims, msg := parseBearer(parser, key, r)
+			if claims == nil {
+				writeAuthError(w, msg)
 				return
 			}
 
-			// Check Bearer prefix
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				writeAuthError(w, "Invalid authorization header format")
-				return
-			}
-
-			tokenString := parts[1]
-
-			// Parse and validate token
-			claims := &UserClaims{}
-			token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-				// Validate signing method
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, errors.ErrUnauthorized("Invalid signing method")
-				}
-				return []byte(config.JWTSecretKey), nil
-			})
-
-			if err != nil {
-				writeAuthError(w, "Invalid token")
-				return
-			}
-
-			if !token.Valid {
-				writeAuthError(w, "Token is invalid")
-				return
-			}
-
-			// Validate issuer if configured
-			if config.JWTIssuer != "" {
-				iss, _ := claims.GetIssuer()
-				if iss != config.JWTIssuer {
-					writeAuthError(w, "Invalid token issuer")
-					return
-				}
-			}
-
-			// Validate audience if configured
-			if config.JWTAudience != "" {
-				aud, _ := claims.GetAudience()
-				found := false
-				for _, a := range aud {
-					if a == config.JWTAudience {
-						found = true
-						break
-					}
-				}
-				if !found {
-					writeAuthError(w, "Invalid token audience")
-					return
-				}
-			}
-
-			// Add user to context
-			ctx := context.WithValue(r.Context(), userContextKey, claims)
-			ctx = logging.ContextWithUserID(ctx, claims.UserID)
-			
-			// Set user ID header for downstream use
-			r.Header.Set("X-User-ID", claims.UserID)
-
-			next.ServeHTTP(w, r.WithContext(ctx))
+			next.ServeHTTP(w, withUser(r, claims))
 		})
 	}
 }
@@ -126,36 +113,30 @@ func JWTAuth(config AuthConfig) func(next http.Handler) http.Handler {
 // OptionalJWTAuth provides optional JWT authentication.
 // It will set user context if token is present and valid, but won't reject if missing.
 func OptionalJWTAuth(config AuthConfig) func(next http.Handler) http.Handler {
+	parser := newTokenParser(config)
+	key := []byte(config.JWTSecretKey)
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			authHeader := r.Header.Get("Authorization")
-			if authHeader == "" {
-				next.ServeHTTP(w, r)
+			if claims, _ := parseBearer(parser, key, r); claims != nil {
+				r = withUser(r, claims)
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+// RequireOwner rejects requests whose URL parameter (e.g. {userID}) does not match the
+// authenticated subject, so callers can only access their own resources.
+// It must run after JWTAuth.
+func RequireOwner(param string) func(next http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			claims := GetUserFromContext(r.Context())
+			if claims == nil || claims.Subject != chi.URLParam(r, param) {
+				writeJSONError(w, http.StatusForbidden, errors.CodeForbidden, "Access to this resource is not allowed")
 				return
 			}
-
-			parts := strings.SplitN(authHeader, " ", 2)
-			if len(parts) != 2 || strings.ToLower(parts[0]) != "bearer" {
-				next.ServeHTTP(w, r)
-				return
-			}
-
-			tokenString := parts[1]
-			claims := &UserClaims{}
-			token, err := jwt.ParseWithClaims(tokenString, claims, func(token *jwt.Token) (interface{}, error) {
-				if _, ok := token.Method.(*jwt.SigningMethodHMAC); !ok {
-					return nil, errors.ErrUnauthorized("Invalid signing method")
-				}
-				return []byte(config.JWTSecretKey), nil
-			})
-
-			if err == nil && token.Valid {
-				ctx := context.WithValue(r.Context(), userContextKey, claims)
-				ctx = logging.ContextWithUserID(ctx, claims.UserID)
-				r.Header.Set("X-User-ID", claims.UserID)
-				r = r.WithContext(ctx)
-			}
-
 			next.ServeHTTP(w, r)
 		})
 	}
@@ -193,11 +174,17 @@ func GetUserFromContext(ctx context.Context) *UserClaims {
 }
 
 func writeAuthError(w http.ResponseWriter, message string) {
-	w.Header().Set("Content-Type", "application/json")
 	w.Header().Set("WWW-Authenticate", "Bearer")
-	w.WriteHeader(http.StatusUnauthorized)
-	json.NewEncoder(w).Encode(map[string]interface{}{
-		"code":    errors.CodeUnauthorized,
+	writeJSONError(w, http.StatusUnauthorized, errors.CodeUnauthorized, message)
+}
+
+// writeJSONError writes a standard error body. Write errors are ignored because the
+// client has already gone away if the response cannot be written.
+func writeJSONError(w http.ResponseWriter, status int, code, message string) {
+	w.Header().Set("Content-Type", "application/json")
+	w.WriteHeader(status)
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"code":    code,
 		"message": message,
 	})
 }

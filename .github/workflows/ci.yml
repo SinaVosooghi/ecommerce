@@ -1,0 +1,122 @@
+# Pull request checks. Deployment stays in AWS CodePipeline (see
+# services/cart-service/buildspec-build.yml).
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches: [master]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  go:
+    name: Go (lint, test, vulncheck)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        working-directory: services/cart-service
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: services/cart-service/go.mod
+          cache-dependency-path: services/cart-service/go.sum
+
+      - name: Verify modules
+        run: |
+          go mod verify
+          go mod tidy -diff
+
+      - name: Build
+        run: go build ./...
+
+      - name: Vet
+        run: go vet ./...
+
+      - name: Lint
+        uses: golangci/golangci-lint-action@v8
+        with:
+          version: v2.14.0
+          working-directory: services/cart-service
+
+      - name: Test
+        run: |
+          go test -race -count=1 -coverprofile=coverage.out ./...
+          go tool cover -func=coverage.out | tail -1
+
+      - name: Vulnerability scan
+        run: go tool govulncheck ./...
+
+  docker:
+    name: Docker image builds
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - name: Build image
+        working-directory: services/cart-service
+        run: docker build --build-arg VERSION="${GITHUB_SHA::8}" -t cart-service:ci .
+
+      - name: Container health check passes
+        run: |
+          docker run -d --name cart-service -e AUTH_ENABLED=false -e EVENTBRIDGE_ENABLED=false \
+            -e AWS_ACCESS_KEY_ID=ci -e AWS_SECRET_ACCESS_KEY=ci cart-service:ci
+          for _ in $(seq 1 20); do
+            if docker exec cart-service /cart-service -health-check; then
+              echo "healthy"; docker rm -f cart-service >/dev/null; exit 0
+            fi
+            sleep 1
+          done
+          docker logs cart-service
+          exit 1
+
+  terraform:
+    name: Terraform (fmt, validate, tflint)
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          persist-credentials: false
+
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.16.5
+
+      - name: Format
+        run: terraform fmt -check -recursive -diff infrastructure
+
+      # staging is not validated: it is an incomplete copy of prod (no variables.tf).
+      - name: Validate
+        run: |
+          for dir in infrastructure/backend infrastructure/environments/dev infrastructure/environments/prod; do
+            echo "::group::$dir"
+            terraform -chdir="$dir" init -backend=false -input=false
+            terraform -chdir="$dir" validate
+            echo "::endgroup::"
+          done
+
+      - uses: terraform-linters/setup-tflint@v4
+
+      # Warnings are reported but only errors fail the build until existing findings are fixed.
+      - name: TFLint
+        run: |
+          tflint --init
+          for dir in infrastructure/backend infrastructure/environments/dev infrastructure/environments/prod; do
+            echo "::group::$dir"
+            tflint --chdir="$dir" --call-module-type=local --minimum-failure-severity=error
+            echo "::endgroup::"
+          done

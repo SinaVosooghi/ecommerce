@@ -4,7 +4,7 @@
 locals {
   create_vpc = var.vpc_id == ""
   vpc_id     = local.create_vpc ? aws_vpc.main[0].id : var.vpc_id
-  
+
   # Calculate subnet CIDRs from VPC CIDR
   azs = slice(data.aws_availability_zones.available.names, 0, var.az_count)
 }
@@ -21,12 +21,12 @@ data "aws_vpc" "existing" {
 
 data "aws_subnets" "existing_private" {
   count = local.create_vpc ? 0 : 1
-  
+
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
   }
-  
+
   tags = {
     Tier = "Private"
   }
@@ -34,12 +34,12 @@ data "aws_subnets" "existing_private" {
 
 data "aws_subnets" "existing_public" {
   count = local.create_vpc ? 0 : 1
-  
+
   filter {
     name   = "vpc-id"
     values = [var.vpc_id]
   }
-  
+
   tags = {
     Tier = "Public"
   }

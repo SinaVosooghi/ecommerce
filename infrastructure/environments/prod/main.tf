@@ -193,6 +193,22 @@ module "secrets" {
 }
 
 #------------------------------------------------------------------------------
+# JWT signing key
+# Terraform creates the secret but never its value, so the key stays out of state.
+# Set it once per environment before the service can start, e.g.:
+#   aws secretsmanager put-secret-value --secret-id <jwt_secret_name output> \
+#     --secret-string "$(openssl rand -base64 48)"
+#------------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "jwt_secret_key" {
+  name        = "${var.project_name}/${var.environment}/${var.service_name}/jwt-secret-key"
+  description = "HS256 signing key for ${var.service_name} JWTs"
+
+  recovery_window_in_days = 7
+
+  tags = local.common_tags
+}
+
+#------------------------------------------------------------------------------
 # IAM
 #------------------------------------------------------------------------------
 module "iam" {
@@ -206,7 +222,7 @@ module "iam" {
   log_group_arn      = module.cloudwatch.log_group_arn
   dynamodb_table_arn = module.dynamodb.table_arn
   event_bus_arn      = module.eventbridge.event_bus_arn
-  secrets_arns       = values(module.secrets.secret_arns)
+  secrets_arns       = concat(values(module.secrets.secret_arns), [aws_secretsmanager_secret.jwt_secret_key.arn])
   enable_xray        = true
   enable_ecs_exec    = false # Disable in prod
   tags               = local.common_tags
@@ -218,30 +234,30 @@ module "iam" {
 module "ecs" {
   source = "../../modules/ecs"
 
-  project_name           = var.project_name
-  service_name           = var.service_name
-  environment            = var.environment
-  aws_region             = var.aws_region
-  vpc_id                 = module.vpc.vpc_id
-  private_subnet_ids     = module.vpc.private_subnet_ids
-  ecr_repository_url     = module.ecr.repository_url
-  image_tag              = var.image_tag
-  container_port         = 8080
-  task_cpu               = 1024
-  task_memory            = 2048
-  desired_count          = 3
-  execution_role_arn     = module.iam.execution_role_arn
-  task_role_arn          = module.iam.task_role_arn
-  target_group_arn       = module.alb.target_group_arn
-  alb_security_group_id  = module.alb.security_group_id
-  log_group_name         = module.cloudwatch.log_group_name
-  use_fargate_spot       = false # Use regular Fargate in prod
-  enable_execute_command = false
-  enable_autoscaling     = true
-  min_capacity           = 3
-  max_capacity           = 20
-  cpu_target_value       = 70
-  memory_target_value    = 80
+  project_name              = var.project_name
+  service_name              = var.service_name
+  environment               = var.environment
+  aws_region                = var.aws_region
+  vpc_id                    = module.vpc.vpc_id
+  private_subnet_ids        = module.vpc.private_subnet_ids
+  ecr_repository_url        = module.ecr.repository_url
+  image_tag                 = var.image_tag
+  container_port            = 8080
+  task_cpu                  = 1024
+  task_memory               = 2048
+  desired_count             = 3
+  execution_role_arn        = module.iam.execution_role_arn
+  task_role_arn             = module.iam.task_role_arn
+  target_group_arn          = module.alb.target_group_arn
+  alb_security_group_id     = module.alb.security_group_id
+  log_group_name            = module.cloudwatch.log_group_name
+  use_fargate_spot          = false # Use regular Fargate in prod
+  enable_execute_command    = false
+  enable_autoscaling        = true
+  min_capacity              = 3
+  max_capacity              = 20
+  cpu_target_value          = 70
+  memory_target_value       = 80
   enable_container_insights = true
 
   environment_variables = {
@@ -254,11 +270,15 @@ module "ecs" {
     AWS_XRAY_ENABLED     = "true"
     REDIS_ENABLED        = tostring(var.enable_redis)
     REDIS_URL            = var.enable_redis ? "redis://${module.elasticache.endpoint}:6379" : ""
+    CORS_ALLOWED_ORIGINS = join(",", var.cors_allowed_origins)
   }
 
-  secrets = var.enable_redis && var.redis_auth_token != "" ? {
-    REDIS_AUTH_TOKEN = module.secrets.secret_arns["redis-auth-token"]
-  } : {}
+  secrets = merge(
+    { JWT_SECRET_KEY = aws_secretsmanager_secret.jwt_secret_key.arn },
+    var.enable_redis && var.redis_auth_token != "" ? {
+      REDIS_AUTH_TOKEN = module.secrets.secret_arns["redis-auth-token"]
+    } : {}
+  )
 
   tags = local.common_tags
 }

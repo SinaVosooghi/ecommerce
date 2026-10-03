@@ -74,8 +74,9 @@ resource "aws_ecs_task_definition" "main" {
         }
       ]
 
+      # APP_PORT keeps the app (and its -health-check probe) on the mapped container port.
       environment = [
-        for key, value in var.environment_variables : {
+        for key, value in merge({ APP_PORT = tostring(var.container_port) }, var.environment_variables) : {
           name  = key
           value = value
         }
@@ -98,7 +99,8 @@ resource "aws_ecs_task_definition" "main" {
       }
 
       healthCheck = {
-        command     = ["CMD-SHELL", "wget -q --spider http://localhost:${var.container_port}/health || exit 1"]
+        # The distroless image has no shell or wget; the binary probes its own /health.
+        command     = ["CMD", "/cart-service", "-health-check"]
         interval    = 30
         timeout     = 5
         retries     = 3

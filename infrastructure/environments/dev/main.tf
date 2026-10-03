@@ -63,11 +63,11 @@ module "vpc" {
 module "ecr" {
   source = "../../modules/ecr"
 
-  project_name    = var.project_name
-  service_name    = var.service_name
-  environment     = var.environment
-  scan_on_push    = true
-  tags            = local.common_tags
+  project_name = var.project_name
+  service_name = var.service_name
+  environment  = var.environment
+  scan_on_push = true
+  tags         = local.common_tags
 }
 
 #------------------------------------------------------------------------------
@@ -76,19 +76,19 @@ module "ecr" {
 module "cloudwatch" {
   source = "../../modules/cloudwatch"
 
-  project_name         = var.project_name
-  service_name         = var.service_name
-  environment          = var.environment
-  aws_region           = var.aws_region
-  log_retention_days   = 14
-  ecs_cluster_name     = module.ecs.cluster_name
-  ecs_service_name     = module.ecs.service_name
-  alb_arn_suffix       = split("/", module.alb.alb_arn)[2]
+  project_name            = var.project_name
+  service_name            = var.service_name
+  environment             = var.environment
+  aws_region              = var.aws_region
+  log_retention_days      = 14
+  ecs_cluster_name        = module.ecs.cluster_name
+  ecs_service_name        = module.ecs.service_name
+  alb_arn_suffix          = split("/", module.alb.alb_arn)[2]
   target_group_arn_suffix = split(":", module.alb.target_group_arn)[5]
-  dynamodb_table_name  = module.dynamodb.table_name
-  enable_alarms        = false # Disable alarms in dev
-  create_dashboard     = true
-  tags                 = local.common_tags
+  dynamodb_table_name     = module.dynamodb.table_name
+  enable_alarms           = false # Disable alarms in dev
+  create_dashboard        = true
+  tags                    = local.common_tags
 }
 
 #------------------------------------------------------------------------------
@@ -113,13 +113,13 @@ module "alb" {
 module "dynamodb" {
   source = "../../modules/dynamodb"
 
-  project_name   = var.project_name
-  service_name   = var.service_name
-  environment    = var.environment
-  billing_mode   = "PAY_PER_REQUEST" # On-demand for dev
-  enable_ttl     = true
+  project_name                  = var.project_name
+  service_name                  = var.service_name
+  environment                   = var.environment
+  billing_mode                  = "PAY_PER_REQUEST" # On-demand for dev
+  enable_ttl                    = true
   enable_point_in_time_recovery = false # Disable for dev
-  tags           = local.common_tags
+  tags                          = local.common_tags
 }
 
 #------------------------------------------------------------------------------
@@ -141,6 +141,22 @@ module "eventbridge" {
 }
 
 #------------------------------------------------------------------------------
+# JWT signing key
+# Terraform creates the secret but never its value, so the key stays out of state.
+# Set it once per environment before the service can start, e.g.:
+#   aws secretsmanager put-secret-value --secret-id <jwt_secret_name output> \
+#     --secret-string "$(openssl rand -base64 48)"
+#------------------------------------------------------------------------------
+resource "aws_secretsmanager_secret" "jwt_secret_key" {
+  name        = "${var.project_name}/${var.environment}/${var.service_name}/jwt-secret-key"
+  description = "HS256 signing key for ${var.service_name} JWTs"
+
+  recovery_window_in_days = 7
+
+  tags = local.common_tags
+}
+
+#------------------------------------------------------------------------------
 # IAM
 #------------------------------------------------------------------------------
 module "iam" {
@@ -154,6 +170,7 @@ module "iam" {
   log_group_arn      = module.cloudwatch.log_group_arn
   dynamodb_table_arn = module.dynamodb.table_arn
   event_bus_arn      = module.eventbridge.event_bus_arn
+  secrets_arns       = [aws_secretsmanager_secret.jwt_secret_key.arn]
   enable_xray        = var.enable_xray
   enable_ecs_exec    = true # Enable for dev debugging
   tags               = local.common_tags
@@ -165,36 +182,40 @@ module "iam" {
 module "ecs" {
   source = "../../modules/ecs"
 
-  project_name          = var.project_name
-  service_name          = var.service_name
-  environment           = var.environment
-  aws_region            = var.aws_region
-  vpc_id                = module.vpc.vpc_id
-  private_subnet_ids    = module.vpc.private_subnet_ids
-  ecr_repository_url    = module.ecr.repository_url
-  image_tag             = var.image_tag
-  container_port        = 8080
-  task_cpu              = 256
-  task_memory           = 512
-  desired_count         = 1
-  execution_role_arn    = module.iam.execution_role_arn
-  task_role_arn         = module.iam.task_role_arn
-  target_group_arn      = module.alb.target_group_arn
-  alb_security_group_id = module.alb.security_group_id
-  log_group_name        = module.cloudwatch.log_group_name
-  use_fargate_spot      = true # Cost saving for dev
-  enable_execute_command = true
-  enable_autoscaling    = false # Disable for dev
+  project_name              = var.project_name
+  service_name              = var.service_name
+  environment               = var.environment
+  aws_region                = var.aws_region
+  vpc_id                    = module.vpc.vpc_id
+  private_subnet_ids        = module.vpc.private_subnet_ids
+  ecr_repository_url        = module.ecr.repository_url
+  image_tag                 = var.image_tag
+  container_port            = 8080
+  task_cpu                  = 256
+  task_memory               = 512
+  desired_count             = 1
+  execution_role_arn        = module.iam.execution_role_arn
+  task_role_arn             = module.iam.task_role_arn
+  target_group_arn          = module.alb.target_group_arn
+  alb_security_group_id     = module.alb.security_group_id
+  log_group_name            = module.cloudwatch.log_group_name
+  use_fargate_spot          = true # Cost saving for dev
+  enable_execute_command    = true
+  enable_autoscaling        = false # Disable for dev
   enable_container_insights = true
 
   environment_variables = {
-    ENV_NAME           = var.environment
-    LOG_LEVEL          = "debug"
-    AWS_REGION         = var.aws_region
-    DYNAMODB_TABLE     = module.dynamodb.table_name
-    EVENTBRIDGE_ENABLED = "true"
+    ENV_NAME             = var.environment
+    LOG_LEVEL            = "debug"
+    AWS_REGION           = var.aws_region
+    DYNAMODB_TABLE       = module.dynamodb.table_name
+    EVENTBRIDGE_ENABLED  = "true"
     EVENTBRIDGE_BUS_NAME = module.eventbridge.event_bus_name
-    AWS_XRAY_ENABLED   = tostring(var.enable_xray)
+    AWS_XRAY_ENABLED     = tostring(var.enable_xray)
+  }
+
+  secrets = {
+    JWT_SECRET_KEY = aws_secretsmanager_secret.jwt_secret_key.arn
   }
 
   tags = local.common_tags

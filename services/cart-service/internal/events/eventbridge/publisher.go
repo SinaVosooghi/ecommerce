@@ -5,6 +5,7 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
@@ -73,8 +74,7 @@ func (p *Publisher) Publish(ctx context.Context, event events.Event) error {
 		Time:         aws.Time(time.Now().UTC()),
 	}
 
-	// Add trace ID if present
-	if event.Metadata.TraceID != "" {
+	if isXRayTraceHeader(event.Metadata.TraceID) {
 		entry.TraceHeader = aws.String(event.Metadata.TraceID)
 	}
 
@@ -117,7 +117,7 @@ func (p *Publisher) PublishBatch(ctx context.Context, eventList []events.Event) 
 			Time:         aws.Time(time.Now().UTC()),
 		}
 
-		if event.Metadata.TraceID != "" {
+		if isXRayTraceHeader(event.Metadata.TraceID) {
 			entry.TraceHeader = aws.String(event.Metadata.TraceID)
 		}
 
@@ -148,6 +148,12 @@ func (p *Publisher) PublishBatch(ctx context.Context, eventList []events.Event) 
 	}
 
 	return nil
+}
+
+// isXRayTraceHeader reports whether id is an X-Ray trace header (X-Amzn-Trace-Id). The
+// logging middleware falls back to the request ID, which EventBridge would reject.
+func isXRayTraceHeader(id string) bool {
+	return strings.HasPrefix(id, "Root=")
 }
 
 // Close closes the publisher (no-op for EventBridge).

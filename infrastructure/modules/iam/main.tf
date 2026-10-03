@@ -73,16 +73,16 @@ resource "aws_iam_role_policy" "ecs_execution_custom" {
         ]
         Resource = "arn:aws:ssm:${var.aws_region}:${data.aws_caller_identity.current.account_id}:parameter/${var.project_name}/${var.environment}/*"
       }
-    ],
-    length(var.secrets_arns) > 0 ? [
-      {
-        Sid    = "SecretsManager"
-        Effect = "Allow"
-        Action = [
-          "secretsmanager:GetSecretValue"
-        ]
-        Resource = var.secrets_arns
-      }
+      ],
+      length(var.secrets_arns) > 0 ? [
+        {
+          Sid    = "SecretsManager"
+          Effect = "Allow"
+          Action = [
+            "secretsmanager:GetSecretValue"
+          ]
+          Resource = var.secrets_arns
+        }
     ] : [])
   })
 }
@@ -167,7 +167,7 @@ resource "aws_iam_role_policy" "eventbridge" {
 # X-Ray Access
 resource "aws_iam_role_policy" "xray" {
   count = var.enable_xray ? 1 : 0
-  
+
   name = "${var.project_name}-${var.service_name}-xray"
   role = aws_iam_role.ecs_task.id
 

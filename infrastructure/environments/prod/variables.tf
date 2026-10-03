@@ -95,3 +95,14 @@ variable "secrets" {
   default   = {}
   sensitive = true
 }
+
+variable "cors_allowed_origins" {
+  description = "Browser origins allowed to call the API (CORS). Empty disables CORS; \"*\" is rejected by the service outside dev."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = !contains(var.cors_allowed_origins, "*")
+    error_message = "Use explicit origins in prod; \"*\" is not allowed."
+  }
+}

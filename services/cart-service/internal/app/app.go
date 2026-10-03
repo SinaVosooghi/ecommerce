@@ -11,19 +11,19 @@ import (
 
 // Application is the main application container that holds all dependencies.
 type Application struct {
-	Config   *config.Config
-	Logger   *logging.Logger
-	
+	Config *config.Config
+	Logger *logging.Logger
+
 	// Core dependencies
 	Repository CartRepository
 	Publisher  EventPublisher
 	Metrics    MetricsCollector
 	Features   FeatureFlags
 	Secrets    SecretsManager
-	
+
 	// Resilience
 	CircuitBreakers map[string]CircuitBreaker
-	
+
 	// Lifecycle management
 	shutdownFuncs []func(context.Context) error
 	mu            sync.Mutex
@@ -108,47 +108,4 @@ func (a *Application) RegisterCircuitBreaker(name string, cb CircuitBreaker) {
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.CircuitBreakers[name] = cb
-}
-
-// HealthCheck performs a health check on all dependencies.
-func (a *Application) HealthCheck(ctx context.Context) error {
-	// Check repository if available
-	if a.Repository != nil {
-		// Perform a simple operation to verify connectivity
-		_, err := a.Repository.GetCart(ctx, "__health_check__")
-		if err != nil {
-			// Ignore "not found" errors, only fail on actual connectivity issues
-			// This is a simplified check - the actual implementation would be more nuanced
-			a.Logger.WithError(err).Debug("Repository health check")
-		}
-	}
-
-	return nil
-}
-
-// ReadinessCheck performs a readiness check to verify the service can handle traffic.
-func (a *Application) ReadinessCheck(ctx context.Context) error {
-	// Check all critical dependencies
-	checks := []struct {
-		name string
-		fn   func() error
-	}{
-		{
-			name: "repository",
-			fn: func() error {
-				if a.Repository == nil {
-					return fmt.Errorf("repository not initialized")
-				}
-				return nil
-			},
-		},
-	}
-
-	for _, check := range checks {
-		if err := check.fn(); err != nil {
-			return fmt.Errorf("%s check failed: %w", check.name, err)
-		}
-	}
-
-	return nil
 }

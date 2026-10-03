@@ -46,7 +46,7 @@ func TestCart_AddItem(t *testing.T) {
 		{
 			name: "add item with existing product increases quantity",
 			setup: func(c *Cart) {
-				c.AddItem(NewCartItem("product-1", 2, 1000))
+				_ = c.AddItem(NewCartItem("product-1", 2, 1000))
 			},
 			item:      NewCartItem("product-1", 3, 1000),
 			wantErr:   false,
@@ -103,10 +103,10 @@ func TestCart_AddItem(t *testing.T) {
 
 func TestCart_AddItem_UpdatesQuantityForExistingProduct(t *testing.T) {
 	cart := NewCart("user-123")
-	
+
 	err := cart.AddItem(NewCartItem("product-1", 2, 1000))
 	require.NoError(t, err)
-	
+
 	err = cart.AddItem(NewCartItem("product-1", 3, 1000))
 	require.NoError(t, err)
 
@@ -118,7 +118,7 @@ func TestCart_AddItem_UpdatesQuantityForExistingProduct(t *testing.T) {
 func TestCart_RemoveItem(t *testing.T) {
 	cart := NewCart("user-123")
 	item := NewCartItem("product-1", 1, 1000)
-	cart.AddItem(item)
+	require.NoError(t, cart.AddItem(item))
 
 	err := cart.RemoveItem(item.ItemID)
 	assert.NoError(t, err)
@@ -160,7 +160,7 @@ func TestCart_UpdateItemQuantity(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			cart := NewCart("user-123")
 			item := NewCartItem("product-1", 1, 1000)
-			cart.AddItem(item)
+			require.NoError(t, cart.AddItem(item))
 
 			err := cart.UpdateItemQuantity(item.ItemID, tt.quantity)
 
@@ -184,28 +184,28 @@ func TestCart_UpdateItemQuantity_NotFound(t *testing.T) {
 
 func TestCart_Clear(t *testing.T) {
 	cart := NewCart("user-123")
-	cart.AddItem(NewCartItem("product-1", 1, 1000))
-	cart.AddItem(NewCartItem("product-2", 2, 2000))
+	require.NoError(t, cart.AddItem(NewCartItem("product-1", 1, 1000)))
+	require.NoError(t, cart.AddItem(NewCartItem("product-2", 2, 2000)))
 
 	assert.Equal(t, 2, cart.ItemCount())
-	
+
 	cart.Clear()
-	
+
 	assert.Equal(t, 0, cart.ItemCount())
 }
 
 func TestCart_TotalPrice(t *testing.T) {
 	cart := NewCart("user-123")
-	cart.AddItem(NewCartItem("product-1", 2, 1000)) // 2 x 1000 = 2000
-	cart.AddItem(NewCartItem("product-2", 3, 500))  // 3 x 500 = 1500
+	require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000))) // 2 x 1000 = 2000
+	require.NoError(t, cart.AddItem(NewCartItem("product-2", 3, 500)))  // 3 x 500 = 1500
 
 	assert.Equal(t, int64(3500), cart.TotalPrice())
 }
 
 func TestCart_TotalQuantity(t *testing.T) {
 	cart := NewCart("user-123")
-	cart.AddItem(NewCartItem("product-1", 2, 1000))
-	cart.AddItem(NewCartItem("product-2", 3, 500))
+	require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
+	require.NoError(t, cart.AddItem(NewCartItem("product-2", 3, 500)))
 
 	assert.Equal(t, 5, cart.TotalQuantity())
 }
@@ -243,7 +243,7 @@ func TestCart_IncrementVersion(t *testing.T) {
 func TestCart_FindItem(t *testing.T) {
 	cart := NewCart("user-123")
 	item := NewCartItem("product-1", 1, 1000)
-	cart.AddItem(item)
+	require.NoError(t, cart.AddItem(item))
 
 	found, idx := cart.FindItem(item.ItemID)
 	assert.NotNil(t, found)
@@ -258,7 +258,7 @@ func TestCart_FindItem(t *testing.T) {
 func TestCart_FindItemByProductID(t *testing.T) {
 	cart := NewCart("user-123")
 	item := NewCartItem("product-1", 1, 1000)
-	cart.AddItem(item)
+	require.NoError(t, cart.AddItem(item))
 
 	found, idx := cart.FindItemByProductID("product-1")
 	assert.NotNil(t, found)
@@ -271,8 +271,8 @@ func TestCart_FindItemByProductID(t *testing.T) {
 
 func TestCart_Summary(t *testing.T) {
 	cart := NewCart("user-123")
-	cart.AddItem(NewCartItem("product-1", 2, 1000))
-	cart.AddItem(NewCartItem("product-2", 3, 500))
+	require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
+	require.NoError(t, cart.AddItem(NewCartItem("product-2", 3, 500)))
 
 	summary := cart.Summary()
 
@@ -299,7 +299,7 @@ func TestMergeCarts(t *testing.T) {
 			},
 			setupGuestCart: func() *Cart {
 				cart := NewCart("guest-123")
-				cart.AddItem(NewCartItem("product-1", 2, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
 				return cart
 			},
 			wantItemCount: 1,
@@ -309,7 +309,7 @@ func TestMergeCarts(t *testing.T) {
 			name: "nil guest cart returns user cart",
 			setupUserCart: func() *Cart {
 				cart := NewCart("user-123")
-				cart.AddItem(NewCartItem("product-1", 2, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
 				return cart
 			},
 			setupGuestCart: func() *Cart {
@@ -322,12 +322,12 @@ func TestMergeCarts(t *testing.T) {
 			name: "merge keeps higher quantity for duplicates",
 			setupUserCart: func() *Cart {
 				cart := NewCart("user-123")
-				cart.AddItem(NewCartItem("product-1", 2, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
 				return cart
 			},
 			setupGuestCart: func() *Cart {
 				cart := NewCart("guest-123")
-				cart.AddItem(NewCartItem("product-1", 5, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 5, 1000)))
 				return cart
 			},
 			wantItemCount: 1,
@@ -337,12 +337,12 @@ func TestMergeCarts(t *testing.T) {
 			name: "merge adds new items from guest cart",
 			setupUserCart: func() *Cart {
 				cart := NewCart("user-123")
-				cart.AddItem(NewCartItem("product-1", 2, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
 				return cart
 			},
 			setupGuestCart: func() *Cart {
 				cart := NewCart("guest-123")
-				cart.AddItem(NewCartItem("product-2", 3, 500))
+				require.NoError(t, cart.AddItem(NewCartItem("product-2", 3, 500)))
 				return cart
 			},
 			wantItemCount: 2,
@@ -352,13 +352,13 @@ func TestMergeCarts(t *testing.T) {
 			name: "merge combines duplicate and new items",
 			setupUserCart: func() *Cart {
 				cart := NewCart("user-123")
-				cart.AddItem(NewCartItem("product-1", 2, 1000))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 2, 1000)))
 				return cart
 			},
 			setupGuestCart: func() *Cart {
 				cart := NewCart("guest-123")
-				cart.AddItem(NewCartItem("product-1", 5, 1000))
-				cart.AddItem(NewCartItem("product-2", 3, 500))
+				require.NoError(t, cart.AddItem(NewCartItem("product-1", 5, 1000)))
+				require.NoError(t, cart.AddItem(NewCartItem("product-2", 3, 500)))
 				return cart
 			},
 			wantItemCount: 2,

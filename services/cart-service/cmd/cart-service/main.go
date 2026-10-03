@@ -3,6 +3,8 @@ package main
 
 import (
 	"context"
+	"errors"
+	"flag"
 	"fmt"
 	"net/http"
 	"os"
@@ -10,24 +12,62 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/api/middleware"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/api/v1/handlers"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/app"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/config"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/core/cart"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/events/eventbridge"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/health"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/logging"
+	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/metrics"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/persistence/dynamodb"
 	"github.com/sinavosooghi/ecommerce/services/cart-service/internal/server"
 )
 
+// version is set at build time with -ldflags "-X main.version=...".
+var version = "dev"
+
 func main() {
+	healthCheck := flag.Bool("health-check", false, "probe the local /health endpoint and exit 0 if healthy (for container health checks)")
+	flag.Parse()
+
+	if *healthCheck {
+		port := os.Getenv("APP_PORT")
+		if port == "" {
+			port = "8080"
+		}
+		os.Exit(probeHealth("http://127.0.0.1:" + port + "/health"))
+	}
+
 	if err := run(); err != nil {
 		fmt.Fprintf(os.Stderr, "Error: %v\n", err)
 		os.Exit(1)
 	}
 }
 
+// probeHealth returns 0 if url answers 200 OK within the timeout, and 1 otherwise.
+// The runtime image has no shell or wget, so the binary checks itself.
+func probeHealth(url string) int {
+	client := &http.Client{Timeout: 3 * time.Second}
+	resp, err := client.Get(url) //nolint:gosec // url is the local health endpoint built from APP_PORT
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "health check failed: %v\n", err)
+		return 1
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		fmt.Fprintf(os.Stderr, "health check failed: status %d\n", resp.StatusCode)
+		return 1
+	}
+	return 0
+}
+
 func run() error {
-	// Create base context
-	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
+	// Cancelled on SIGINT/SIGTERM; background workers stop with it.
+	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
+	defer stop()
 
 	// Load configuration
 	cfg, err := config.Load()
@@ -42,8 +82,11 @@ func run() error {
 		Environment: cfg.Environment,
 	})
 
-	logger.Info("Starting cart service...")
+	logger.Infof("Starting cart service %s", version)
 	logger.Infof("Environment: %s, Port: %d", cfg.Environment, cfg.Port)
+	if !cfg.AuthEnabled {
+		logger.Warn("Authentication is DISABLED; any caller can access any cart (dev only)")
+	}
 
 	// Initialize DynamoDB client
 	dbClient, err := dynamodb.NewClient(ctx, dynamodb.ClientConfig{
@@ -54,12 +97,30 @@ func run() error {
 	if err != nil {
 		return fmt.Errorf("failed to create DynamoDB client: %w", err)
 	}
-	logger.Infof("Connected to DynamoDB table: %s", cfg.DynamoDBTable)
+	logger.Infof("Using DynamoDB table: %s", cfg.DynamoDBTable)
 
-	// Create repository
 	repo := dynamodb.NewRepository(dbClient)
 
-	// Initialize application container
+	// Event publishing. Leave the interface nil when disabled so the service skips it.
+	var publisher cart.EventPublisher
+	if cfg.EventBridgeEnabled {
+		ebPublisher, err := eventbridge.NewPublisher(ctx, eventbridge.PublisherConfig{
+			Region:  cfg.AWSRegion,
+			BusName: cfg.EventBridgeBusName,
+			Source:  cfg.EventBridgeSource,
+		}, logger)
+		if err != nil {
+			return fmt.Errorf("failed to create EventBridge publisher: %w", err)
+		}
+		publisher = eventbridge.NewCartEventPublisher(ebPublisher)
+	}
+
+	// No product catalog exists yet, so prices come from the client.
+	logger.Warn("No price validator configured; client-supplied unit_price is trusted")
+	cartService := cart.NewService(repo, publisher, cart.ServiceConfig{
+		PublishEvents: cfg.EventBridgeEnabled,
+	})
+
 	application, err := app.New(ctx,
 		app.WithConfig(cfg),
 		app.WithLogger(logger),
@@ -69,14 +130,32 @@ func run() error {
 		return fmt.Errorf("failed to initialize application: %w", err)
 	}
 
-	// Initialize server
+	healthHandler := health.NewHandler()
+	healthHandler.RegisterChecker(health.NewRepositoryChecker("dynamodb", repo.HealthCheck))
+
+	deps := server.Deps{
+		Cart:        handlers.NewCartHandler(cartService, logger),
+		Health:      healthHandler,
+		RateLimiter: middleware.NewRateLimiter(ctx, cfg.RateLimitRPS, cfg.RateLimitBurst),
+	}
+	if cfg.IdempotencyEnabled {
+		deps.Idempotency = dynamodb.NewIdempotencyStore(dbClient)
+	}
+	if cfg.MetricsEnabled {
+		deps.Metrics = metrics.NewCloudWatchCollector(metrics.CloudWatchConfig{
+			Namespace:   "Ecommerce/CartService",
+			ServiceName: cfg.ServiceName,
+			Environment: cfg.Environment,
+		})
+	}
+
 	srv, err := server.New(server.Config{
 		Port:           cfg.Port,
 		ReadTimeout:    15 * time.Second,
 		WriteTimeout:   15 * time.Second,
 		IdleTimeout:    60 * time.Second,
 		MaxHeaderBytes: 1 << 20, // 1 MB
-	}, application)
+	}, application, deps)
 	if err != nil {
 		return fmt.Errorf("failed to create server: %w", err)
 	}
@@ -88,20 +167,17 @@ func run() error {
 		serverErrors <- srv.ListenAndServe()
 	}()
 
-	// Wait for shutdown signal
-	shutdown := make(chan os.Signal, 1)
-	signal.Notify(shutdown, syscall.SIGINT, syscall.SIGTERM)
-
 	select {
 	case err := <-serverErrors:
-		if err != nil && err != http.ErrServerClosed {
+		if !errors.Is(err, http.ErrServerClosed) {
 			return fmt.Errorf("server error: %w", err)
 		}
-	case sig := <-shutdown:
-		logger.Infof("Received signal: %v, initiating graceful shutdown", sig)
+	case <-ctx.Done():
+		logger.Info("Shutdown signal received, initiating graceful shutdown")
+		// Restore default signal handling so a second signal terminates immediately.
+		stop()
 
-		// Create shutdown context with timeout
-		shutdownCtx, shutdownCancel := context.WithTimeout(ctx, 30*time.Second)
+		shutdownCtx, shutdownCancel := context.WithTimeout(context.WithoutCancel(ctx), 30*time.Second)
 		defer shutdownCancel()
 
 		// Shutdown server

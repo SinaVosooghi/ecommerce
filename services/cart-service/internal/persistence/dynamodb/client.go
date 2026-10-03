@@ -8,6 +8,7 @@ import (
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/dynamodb"
+	"github.com/aws/aws-sdk-go-v2/service/dynamodb/types"
 )
 
 // ClientConfig holds configuration for the DynamoDB client.
@@ -57,10 +58,16 @@ func (c *Client) TableName() string {
 	return c.tableName
 }
 
-// HealthCheck verifies connectivity to DynamoDB.
+// HealthCheck verifies connectivity to DynamoDB. It reads a sentinel key with GetItem,
+// which exercises the same data-plane permissions the service uses (the task role is not
+// granted dynamodb:DescribeTable).
 func (c *Client) HealthCheck(ctx context.Context) error {
-	_, err := c.db.DescribeTable(ctx, &dynamodb.DescribeTableInput{
+	_, err := c.db.GetItem(ctx, &dynamodb.GetItemInput{
 		TableName: aws.String(c.tableName),
+		Key: map[string]types.AttributeValue{
+			"PK": &types.AttributeValueMemberS{Value: "HEALTH#check"},
+			"SK": &types.AttributeValueMemberS{Value: "HEALTH#check"},
+		},
 	})
 	if err != nil {
 		return fmt.Errorf("DynamoDB health check failed: %w", err)

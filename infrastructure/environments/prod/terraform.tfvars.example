@@ -30,12 +30,13 @@ source_provider         = "CodeStarSourceConnection"
 codestar_connection_arn = "arn:aws:codestar-connections:us-east-1:ACCOUNT_ID:connection/CONNECTION_ID"
 repository_id           = "owner/ecommerce"
 
+# Browser origins allowed to call the API (leave empty if only servers call it)
+cors_allowed_origins = ["https://shop.example.com"]
+
 # Secrets (optional - can also be created manually)
+# The JWT signing key is NOT set here: Terraform creates an empty secret and you set its
+# value out-of-band (see the jwt_secret_name output) so it never lands in state.
 secrets = {
-  "jwt-secret" = {
-    description = "JWT signing secret"
-    value       = "your-jwt-secret-here"
-  }
   "redis-auth-token" = {
     description = "Redis authentication token"
     value       = "your-redis-token-here"
