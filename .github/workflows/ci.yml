@@ -109,7 +109,7 @@ jobs:
             echo "::endgroup::"
           done
 
-      - uses: terraform-linters/setup-tflint@v4
+      - uses: terraform-linters/setup-tflint@v6
 
       # Warnings are reported but only errors fail the build until existing findings are fixed.
       - name: TFLint
